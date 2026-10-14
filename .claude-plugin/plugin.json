@@ -1,0 +1,66 @@
+{
+  "name": "cache-meter",
+  "version": "0.5.0",
+  "description": "Context size, prompt cache countdown, subscription limits and subagents above the prompt; per-answer token summary, history pane and /keepalive",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "cacheTtl": {
+      "type": "string",
+      "title": "Prompt cache TTL",
+      "description": "TTL of the prompt cache the session's requests use (1h on subscription, 5m in usage overage or on API)",
+      "options": [
+        "1h",
+        "5m"
+      ],
+      "default": "1h"
+    },
+    "ctxYellowK": {
+      "type": "number",
+      "title": "Context: yellow from (k tokens)",
+      "description": "Context size in thousands of tokens where the bar turns yellow",
+      "default": 200
+    },
+    "ctxOrangeK": {
+      "type": "number",
+      "title": "Context: orange from (k tokens)",
+      "description": "Context size in thousands of tokens where the bar turns orange",
+      "default": 300
+    },
+    "ctxRedK": {
+      "type": "number",
+      "title": "Context: red from (k tokens)",
+      "description": "Context size in thousands of tokens where the bar turns red: time to /compact",
+      "default": 400
+    },
+    "warnMinutes": {
+      "type": "number",
+      "title": "Warn before cache expiry (minutes)",
+      "description": "Notify this many minutes before the prompt cache expires; 0 turns the warning off",
+      "default": 5
+    },
+    "autoKeepalive": {
+      "type": "boolean",
+      "title": "Auto keepalive",
+      "description": "Refresh the prompt cache by itself once before it expires; each message you type allows one more",
+      "default": true
+    },
+    "autoKeepaliveMinutes": {
+      "type": "number",
+      "title": "Auto keepalive before expiry (minutes)",
+      "description": "How many minutes before the cache expires the auto keepalive runs",
+      "default": 2
+    },
+    "bigResultK": {
+      "type": "number",
+      "title": "Warn on tool results over (k tokens)",
+      "description": "Toast when one tool result adds more than this many thousand tokens to the context; 0 turns it off",
+      "default": 15
+    },
+    "repeatReads": {
+      "type": "number",
+      "title": "Warn when a file is read this many times",
+      "description": "Toast when the same file has been read into the context this many times; 0 turns it off",
+      "default": 3
+    }
+  }
+}

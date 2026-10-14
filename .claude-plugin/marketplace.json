@@ -1,0 +1,5 @@
+{
+  "name": "dmitry-mods",
+  "owner": { "name": "d.bormisov" },
+  "plugins": [{ "name": "cache-meter", "source": "./" }]
+}
