@@ -246,12 +246,26 @@ function mergeAgentTypes(
   return merged
 }
 
+function mergeCounts(
+  a: Readonly<Record<string, number>> | undefined,
+  b: Readonly<Record<string, number>> | undefined,
+): Record<string, number> | undefined {
+  if (a === undefined || b === undefined) return a ?? b
+  const merged: Record<string, number> = { ...a }
+  for (const [key, n] of Object.entries(b)) merged[key] = (merged[key] ?? 0) + n
+  return merged
+}
+
 export function addDay(a: DayStats, b: DayStats): DayStats {
   const models = mergeTokenMaps(a.models, b.models)
   const agentTypes = mergeAgentTypes(a.agentTypes, b.agentTypes)
+  const mcpCalls = mergeCounts(a.mcpCalls, b.mcpCalls)
+  const skillCalls = mergeCounts(a.skillCalls, b.skillCalls)
   return {
     ...(models === undefined ? {} : { models }),
     ...(agentTypes === undefined ? {} : { agentTypes }),
+    ...(mcpCalls === undefined ? {} : { mcpCalls }),
+    ...(skillCalls === undefined ? {} : { skillCalls }),
     answers: a.answers + b.answers,
     requests: a.requests + b.requests,
     main: addTokens(a.main, b.main),
@@ -272,6 +286,39 @@ export function withModel(d: DayStats, model: string, tokens: Tokens): DayStats 
 /** A day with `runs` more runs and `tokens` more spent by subagents of `type`. */
 export function withAgentType(d: DayStats, type: string, runs: number, tokens: Tokens): DayStats {
   return { ...d, agentTypes: mergeAgentTypes(d.agentTypes ?? {}, { [type]: { runs, tokens } }) }
+}
+
+/** The wire-name prefix of an MCP tool (`mcp__phpstorm__search` → `mcp__phpstorm__`), or null for any other tool. */
+export function mcpPrefix(tool: string): string | null {
+  const m = /^mcp__.+?__/.exec(tool)
+  return m === null ? null : m[0]
+}
+
+/** A day with one more MCP call under `prefix`. */
+export function withMcpCall(d: DayStats, prefix: string): DayStats {
+  return { ...d, mcpCalls: mergeCounts(d.mcpCalls ?? {}, { [prefix]: 1 }) }
+}
+
+/** A day with one more run of `skill`. */
+export function withSkillCall(d: DayStats, skill: string): DayStats {
+  return { ...d, skillCalls: mergeCounts(d.skillCalls ?? {}, { [skill]: 1 }) }
+}
+
+/** How often each key of `pick` was counted over `keys`, and the latest of those days it was. */
+export function usageOver(
+  days: Readonly<Record<string, DayStats>>,
+  keys: readonly string[],
+  pick: (d: DayStats) => Readonly<Record<string, number>> | undefined,
+): Map<string, { calls: number; lastDay: string }> {
+  const usage = new Map<string, { calls: number; lastDay: string }>()
+  for (const key of keys) {
+    for (const [name, n] of Object.entries(pick(days[key] ?? NO_DAY) ?? {})) {
+      if (n === 0) continue
+      const was = usage.get(name)
+      usage.set(name, { calls: (was?.calls ?? 0) + n, lastDay: was === undefined || key > was.lastDay ? key : was.lastDay })
+    }
+  }
+  return usage
 }
 
 /** `claude-opus-5-5` → `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`; anything else as it is. */

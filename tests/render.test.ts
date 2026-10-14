@@ -134,12 +134,29 @@ test('the stats pane sums every session by day and period', async ($, on) => {
           ...day(2, 100_000),
           models: { 'claude-opus-5-5': tokens, 'claude-haiku-4-5-20251001': { ...tokens, write: 0 } },
           agentTypes: { Explore: { runs: 4, tokens: { ...tokens, write: 0 } } },
+          mcpCalls: { mcp__phpstorm__: 3 },
+          skillCalls: { graphify: 2 },
         },
         '2026-10-13': day(5, 400_000),
       },
       '/work/cache-meter': { '2026-09-01': day(9, 900_000) },
     },
+    contextParts: {
+      at: NOW,
+      total: 250_000,
+      parts: [],
+      memory: [],
+      mcp: [
+        { server: 'phpstorm', tools: 80, tokens: 40_000, prefix: 'mcp__phpstorm__', loadedTokens: 2_000 },
+        { server: 'claude.ai Docs', tools: 5, tokens: 6_000, prefix: 'mcp__claude_ai_Docs__', loadedTokens: 0 },
+      ],
+      skills: [
+        { name: 'graphify', tokens: 300 },
+        { name: 'skill-search', tokens: 250 },
+      ],
+    },
   }
+  on('session.root', () => ({ value: '/work/mp-ranker-back' }))
   on('state.get', ($, e, next) =>
     e.plugin === 'cache-meter' && e.key in stats ? { value: { value: stats[e.key], version: 1 } } : next(e),
   )
@@ -163,6 +180,13 @@ test('the stats pane sums every session by day and period', async ($, on) => {
     expect(await pane.find({ type: 'Text', text: /^Opus 5\.5\s+≈\S+\s+≈\S+/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^Haiku 4\.5\s+≈/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^Explore\s+4\s+≈\S+\s+≈/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^MCP и навыки — mp-ranker-back$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^phpstorm\s+80\s+≈2k\s+≈38k\s+3\s+3\s+ср 14\.10/ })).toBeDefined()
+    const unused = await pane.find({ type: 'Text', text: /^claude\.ai Docs\s+5\s+≈0\s+≈6k\s+0\s+0\s+не было/ })
+    expect(unused?.props.color).toBe('#e5c000')
+    expect(await pane.find({ type: 'Text', text: /^навыков 2, список ≈550 в окне$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /использованы за 30 дней: graphify ×2$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /не использованы \(1\), самые большие: skill-search ≈250$/ })).toBeDefined()
     // Older than 30 days: not among the projects.
     expect(await pane.find({ type: 'Text', text: /^cache-meter\s/ })).toBeUndefined()
     await pane.unmount()

@@ -52,6 +52,8 @@ export type AgentTypeDay = { runs: number; tokens: Tokens }
  * `agents` the subagents', `service` keepalives and compactions.
  * `models` splits all of them by the model that answered, `agentTypes` the
  * subagents by type; both counted since 0.11.0, absent in days stored before.
+ * `mcpCalls` counts calls by MCP tool prefix (`mcp__phpstorm__`), `skillCalls`
+ * skill runs by name, the model's and the person's; both since 0.12.0.
  */
 export type DayStats = {
   answers: number
@@ -64,6 +66,8 @@ export type DayStats = {
   compactions: number
   models?: Record<string, Tokens>
   agentTypes?: Record<string, AgentTypeDay>
+  mcpCalls?: Record<string, number>
+  skillCalls?: Record<string, number>
 }
 
 /** Days by project root, each day by its local date: what one session, or every other summed, spent where. */
@@ -78,7 +82,14 @@ export type ContextParts = {
   total: number
   parts: ContextPart[]
   memory: { path: string; tokens: number }[]
-  mcp: { server: string; tools: number; tokens: number }[]
+  /**
+   * `prefix` is what its tools' wire names start with (`mcp__phpstorm__`);
+   * `loadedTokens` the schemas inside the window, the rest load on demand.
+   * Both absent in a measure from before 0.12.0.
+   */
+  mcp: { server: string; tools: number; tokens: number; prefix?: string; loadedTokens?: number }[]
+  /** Each skill the listing names, with its share of the listing; absent before 0.12.0. */
+  skills?: { name: string; tokens: number }[]
 }
 
 declare module 'claude-code' {

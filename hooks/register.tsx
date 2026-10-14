@@ -53,6 +53,7 @@ import {
   latestDay,
   limitColor,
   limitLabel,
+  mcpPrefix,
   mergeProjects,
   modelRows,
   NO_DAY,
@@ -65,8 +66,11 @@ import {
   toolGroup,
   totalTokens,
   turnSummary,
+  usageOver,
   withAgentType,
+  withMcpCall,
   withModel,
+  withSkillCall,
 } from './format'
 import type { ContextThresholds } from './format'
 
@@ -274,10 +278,16 @@ async function measureParts($: EngineInterface): Promise<void> {
   const usage = await $.session.usage({ breakdown: 'summary' })
   const b = usage.context.breakdown
   if (b === undefined) return
-  const servers = new Map<string, { tools: number; tokens: number }>()
+  const servers = new Map<string, { tools: number; tokens: number; prefix?: string; loadedTokens: number }>()
   for (const tool of b.mcpTools) {
-    const was = servers.get(tool.serverName) ?? { tools: 0, tokens: 0 }
-    servers.set(tool.serverName, { tools: was.tools + 1, tokens: was.tokens + tool.tokens })
+    const was = servers.get(tool.serverName) ?? { tools: 0, tokens: 0, loadedTokens: 0 }
+    servers.set(tool.serverName, {
+      tools: was.tools + 1,
+      tokens: was.tokens + tool.tokens,
+      // The server's name as /mcp lists it is not its tools' prefix (`claude.ai Docs` → `mcp__claude_ai_Docs__`).
+      prefix: was.prefix ?? mcpPrefix(tool.name) ?? undefined,
+      loadedTokens: was.loadedTokens + (tool.isLoaded ? tool.tokens : 0),
+    })
   }
   const parts: ContextParts = {
     at: await $.clock.now(),
@@ -287,6 +297,7 @@ async function measureParts($: EngineInterface): Promise<void> {
       .map(c => ({ name: c.name, tokens: c.tokens, isDeferred: c.kind === 'deferred' })),
     memory: b.memoryFiles.map(f => ({ path: f.path, tokens: f.tokens })).sort((x, y) => y.tokens - x.tokens),
     mcp: [...servers].map(([server, v]) => ({ server, ...v })).sort((x, y) => y.tokens - x.tokens),
+    skills: (b.skills?.skillFrontmatter ?? []).map(k => ({ name: k.name, tokens: k.tokens })).sort((x, y) => y.tokens - x.tokens),
   }
   await update($, contextParts, () => parts)
 }
@@ -498,11 +509,23 @@ export const register: Register = (on, options) => {
     if (result.drop === undefined && e.isMeta !== true && !OWN_COMMANDS.includes(e.command?.name ?? '')) {
       await update($, autoCredits, () => 1)
     }
+    const command = e.command?.name
+    if (result.drop === undefined && command !== undefined) {
+      const skills = (await read($, contextParts))?.skills ?? []
+      if (skills.some(k => k.name === command)) await recordDay($, d => withSkillCall(d, command))
+    }
     return result
   }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
+    // Subagents' calls count too: an MCP server's tools are in their context as well.
+    const prefix = mcpPrefix(e.tool)
+    if (prefix !== null) await recordDay($, d => withMcpCall(d, prefix))
+    if (e.tool === 'Skill' && typeof e.skill === 'string') {
+      const skill = e.skill
+      await recordDay($, d => withSkillCall(d, skill))
+    }
     if (e.agentId === undefined && result.text !== undefined) {
       const group = toolGroup(e.tool)
       const tokens = estimateTokens(result.text)
@@ -985,6 +1008,20 @@ export const register: Register = (on, options) => {
     const weekModels = new Map(modelRows(weekTotal).map(m => [m.label, m.tokens]))
     const monthModelsCost = Math.max(1, monthModels.reduce((sum, m) => sum + inputEquivalent(m.tokens), 0))
     const agentTypes = agentTypeRows(monthTotal).slice(0, 10)
+    const root = await $.session.root().catch(() => '')
+    const here = projects[root] ?? {}
+    const composition = await read($, contextParts)
+    const mcpWeek = usageOver(here, week, d => d.mcpCalls)
+    const mcpMonth = usageOver(here, month, d => d.mcpCalls)
+    const skillMonth = usageOver(here, month, d => d.skillCalls)
+    const servers = (composition?.mcp ?? []).map(m => {
+      const prefix = m.prefix ?? `mcp__${m.server}__`
+      return { ...m, week: mcpWeek.get(prefix)?.calls ?? 0, month: mcpMonth.get(prefix) }
+    })
+    const skills = composition?.skills ?? []
+    const usedSkills = [...skillMonth].sort((a, b) => b[1].calls - a[1].calls)
+    const unusedSkills = skills.filter(k => !skillMonth.has(k.name))
+    const skillsTokens = skills.reduce((sum, k) => sum + k.tokens, 0)
     const perDay = recent.map(key => ({ key, cost: inputEquivalent(dayTokens(days[key] ?? NO_DAY)), day: days[key] ?? NO_DAY }))
     const top = Math.max(1, ...perDay.map(d => d.cost))
 
@@ -1061,6 +1098,46 @@ export const register: Register = (on, options) => {
             }),
           ]
         )}
+        <Text> </Text>
+
+        <Text weight="bold">{`MCP и навыки — ${root === '' ? 'этот проект' : baseName(root)}`}</Text>
+        {composition === null ? (
+          <Text dimColor>Появится после первого ответа.</Text>
+        ) : (
+          [
+            servers.length === 0 ? (
+              <Text key="mcp-none" dimColor>MCP-серверов нет.</Text>
+            ) : (
+              <Text key="mcp-head" dimColor>
+                {`${''.padEnd(24)}${'инстр.'.padStart(7)}${'в окне'.padStart(8)}${'по запросу'.padStart(12)}${'вызовов 7д'.padStart(12)}${'30д'.padStart(6)}  последний`}
+              </Text>
+            ),
+            ...servers.map((m, i) => {
+              const loaded = m.loadedTokens ?? m.tokens
+              return (
+                <Text key={`mcp-${i}`} color={m.month === undefined ? '#e5c000' : undefined}>
+                  {`${clip(m.server, 22).padEnd(24)}${`${m.tools}`.padStart(7)}${`≈${formatTokens(loaded)}`.padStart(8)}${`≈${formatTokens(m.tokens - loaded)}`.padStart(12)}`}
+                  {`${`${m.week}`.padStart(12)}${`${m.month?.calls ?? 0}`.padStart(6)}  ${m.month === undefined ? 'не было' : dayLabel(m.month.lastDay)}`}
+                </Text>
+              )
+            }),
+            <Text key="skills-head">{`навыков ${skills.length}, список ≈${formatTokens(skillsTokens)} в окне`}</Text>,
+            <Text key="skills-used" dimColor>
+              {`  использованы за 30 дней: ${usedSkills.length === 0 ? '—' : usedSkills.slice(0, 10).map(([name, u]) => `${name} ×${u.calls}`).join(' · ')}`}
+            </Text>,
+            unusedSkills.length === 0 ? null : (
+              <Text key="skills-unused" dimColor>
+                {`  не использованы (${unusedSkills.length}), самые большие: ${unusedSkills
+                  .slice(0, 8)
+                  .map(k => `${k.name} ≈${formatTokens(k.tokens)}`)
+                  .join(' · ')}`}
+              </Text>
+            ),
+          ]
+        )}
+        <Text dimColor>
+          {`состав — текущей сессии; «по запросу» — схемы вне окна, грузятся при поиске инструмента; вызовы с субагентами, учёт с 0.12.0`}
+        </Text>
         <Text> </Text>
 
         <Text weight="bold">По дням</Text>

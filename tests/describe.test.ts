@@ -17,6 +17,10 @@ import {
   NO_TOKENS,
   withAgentType,
   withModel,
+  mcpPrefix,
+  usageOver,
+  withMcpCall,
+  withSkillCall,
   callLabel,
   keepBiggest,
   estimateTokens,
@@ -202,6 +206,20 @@ test('splits days by model and subagent type, and reads days stored before witho
   expect(sum.models?.['claude-opus-5-5']?.read).toBe(100_000)
   expect(addDay(sum, day).agentTypes?.Explore?.runs).toBe(2)
   expect(addDay(NO_DAY, NO_DAY).models).toBeUndefined()
+})
+
+test('counts MCP calls by tool prefix and skill runs, with the last day used', async () => {
+  expect(mcpPrefix('mcp__claude_ai_Claude_Docs__batch')).toBe('mcp__claude_ai_Claude_Docs__')
+  expect(mcpPrefix('Read')).toBeNull()
+  const days = {
+    '2026-10-12': withSkillCall(withMcpCall(NO_DAY, 'mcp__phpstorm__'), 'graphify'),
+    '2026-10-14': withMcpCall(withMcpCall(NO_DAY, 'mcp__phpstorm__'), 'mcp__phpstorm__'),
+    '2026-10-13': NO_DAY,
+  }
+  const usage = usageOver(days, ['2026-10-12', '2026-10-13', '2026-10-14'], d => d.mcpCalls)
+  expect(usage.get('mcp__phpstorm__')).toEqual({ calls: 3, lastDay: '2026-10-14' })
+  expect(usageOver(days, ['2026-10-13', '2026-10-14'], d => d.skillCalls).has('graphify')).toBe(false)
+  expect(addDay(days['2026-10-12'], days['2026-10-14']).mcpCalls).toEqual({ mcp__phpstorm__: 3 })
 })
 
 test('draws the context as a gradient with each zone dashed ahead', async () => {
