@@ -32,6 +32,8 @@ import type { ContextThresholds } from './format'
 
 const PANE = 'cache-meter'
 const KEEPALIVE_PROMPT = 'Служебный запрос для продления кэша: ответь одним словом «ok».'
+const COMPACT_POLL_MS = 1000
+const COMPACT_POLL_ATTEMPTS = 30
 
 const last = atom({ plugin: 'cache-meter', key: 'last' } as const, null)
 const contextFill = atom({ plugin: 'cache-meter', key: 'context' } as const, null)
@@ -84,6 +86,22 @@ function tallyOf(turnId: string): TurnTally {
     tallies.set(turnId, tally)
   }
   return tally
+}
+
+// The compact hook runs before the compacted transcript is installed: until
+// then the window still reports the last response from before it, and the
+// breakdown's Messages row is reconciled to that, so it reads the old size.
+// Once installed, the window has no response yet and context.tokens is absent.
+async function measureCompacted($: EngineInterface, attempt: number): Promise<void> {
+  const usage = await $.session.usage({ breakdown: 'summary' })
+  const tokens = usage.context.breakdown?.totalTokens
+  if (usage.context.tokens !== undefined || tokens === undefined) {
+    if (attempt < COMPACT_POLL_ATTEMPTS) $.clock.after(COMPACT_POLL_MS, () => void measureCompacted($, attempt + 1))
+    return
+  }
+  const window = usage.context.window
+  const fill: ContextFill = { tokens, window, percent: Math.round((tokens / window) * 100), isEstimate: true }
+  await update($, contextFill, () => fill)
 }
 
 async function tick($: EngineInterface, settings: Settings): Promise<void> {
@@ -272,8 +290,9 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {
+    // Right after a compaction the window has no response yet: keep the estimate.
     const fill = toFill(e.context)
-    await update($, contextFill, () => fill)
+    if (fill !== null) await update($, contextFill, () => fill)
     await update($, limits, () => toLimits(e.rateLimits))
     return next(e)
   })
@@ -289,13 +308,7 @@ export const register: Register = (on, options) => {
     await update($, compactedAt, () => at)
     await update($, last, () => null)
 
-    const usage = await $.session.usage({ breakdown: 'summary' })
-    const tokens = usage.context.breakdown?.totalTokens ?? result.tokensAfter
-    if (tokens !== undefined) {
-      const window = usage.context.window
-      const fill: ContextFill = { tokens, window, percent: Math.round((tokens / window) * 100), isEstimate: true }
-      await update($, contextFill, () => fill)
-    }
+    $.clock.after(COMPACT_POLL_MS, () => void measureCompacted($, 1))
     return result
   }).catch(($, e, next) => next(e))
 
