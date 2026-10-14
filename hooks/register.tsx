@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionContextUsage, SessionRateLimit } from 'claude-code'
 
-import type { AgentRun, BigResult, CacheHit, CacheLoss, ContextFill, FileReads, RateLimitFill, Tokens, ToolUsage, TurnRecord } from '../types'
+import type { AgentRecord, BigResult, CacheHit, CacheLoss, ContextFill, FileReads, RateLimitFill, Tokens, ToolUsage, TurnRecord } from '../types'
 import {
   addTokens,
   baseName,
   callLabel,
+  clip,
   cacheColor,
   cacheLossReason,
   contextColor,
@@ -40,7 +41,7 @@ const warnedFor = atom({ plugin: 'cache-meter', key: 'warnedFor' } as const, nul
 const compactedAt = atom({ plugin: 'cache-meter', key: 'compactedAt' } as const, null)
 const turns = atom({ plugin: 'cache-meter', key: 'turns' } as const, [])
 const losses = atom({ plugin: 'cache-meter', key: 'losses' } as const, [])
-const agents = atom({ plugin: 'cache-meter', key: 'agents' } as const, [])
+const agentLog = atom({ plugin: 'cache-meter', key: 'agentLog' } as const, [])
 const agentTotals = atom({ plugin: 'cache-meter', key: 'agentTotals' } as const, { runs: 0, tokens: 0 })
 const tzOffset = atom({ plugin: 'cache-meter', key: 'tzOffsetMinutes' } as const, 0)
 const toolUsage = atom({ plugin: 'cache-meter', key: 'toolUsage' } as const, {})
@@ -303,11 +304,26 @@ export const register: Register = (on, options) => {
       currentTurnId = e.turnId
       isTurnRunning = true
       tallyOf(e.turnId)
-    } else if (!(await read($, agents)).some(a => a.id === e.agentId)) {
-      const run: AgentRun = { id: e.agentId, tokens: 0 }
-      await update($, agents, list => [...list, run])
-      await update($, agentTotals, t => ({ ...t, runs: t.runs + 1 }))
-      if (currentTurnId !== null) tallyOf(currentTurnId).agentRuns += 1
+    } else {
+      const id = e.agentId
+      const known = (await read($, agentLog)).find(a => a.id === id)
+      if (known !== undefined) {
+        // Another run of the same agent's loop (it was messaged again).
+        await update($, agentLog, list => list.map(a => (a.id === id ? { ...a, isRunning: true } : a)))
+      } else {
+        const info = (await $.agent.list()).find(a => a.id === id)
+        const record: AgentRecord = {
+          id,
+          type: info?.type ?? 'agent',
+          description: info?.description ?? '',
+          isRunning: true,
+          startedAt: await $.clock.now(),
+          tokens: 0,
+        }
+        await update($, agentLog, list => [...list, record].slice(-50))
+        await update($, agentTotals, t => ({ ...t, runs: t.runs + 1 }))
+        if (currentTurnId !== null) tallyOf(currentTurnId).agentRuns += 1
+      }
     }
     return next(e)
   })
@@ -329,7 +345,7 @@ export const register: Register = (on, options) => {
 
     if (e.agentId !== undefined) {
       const spent = totalTokens(tokens)
-      await update($, agents, list => list.map(a => (a.id === e.agentId ? { ...a, tokens: a.tokens + spent } : a)))
+      await update($, agentLog, list => list.map(a => (a.id === e.agentId ? { ...a, tokens: a.tokens + spent } : a)))
       await update($, agentTotals, t => ({ ...t, tokens: t.tokens + spent }))
       if (currentTurnId !== null) tallyOf(currentTurnId).agentTokens += spent
       return result
@@ -363,7 +379,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
 
     if (e.agentId !== undefined) {
-      await update($, agents, list => list.filter(a => a.id !== e.agentId))
+      await update($, agentLog, list => list.map(a => (a.id === e.agentId ? { ...a, isRunning: false } : a)))
       return result
     }
 
@@ -395,7 +411,7 @@ export const register: Register = (on, options) => {
     const hit = await read($, last)
     const now = await read($, clockNow)
     const rateLimits = await read($, limits)
-    const running = await read($, agents)
+    const running = (await read($, agentLog)).filter(a => a.isRunning)
     const tz = await read($, tzOffset)
     const label = `кэш ${settings.ttlLabel}: `
 
@@ -476,6 +492,9 @@ export const register: Register = (on, options) => {
     const history = await read($, turns)
     const lost = await read($, losses)
     const totals = await read($, agentTotals)
+    const agentRows = [...(await read($, agentLog))]
+      .sort((a, b) => Number(b.isRunning) - Number(a.isRunning) || b.startedAt - a.startedAt)
+      .slice(0, 15)
     const tz = await read($, tzOffset)
     const tools = Object.entries(await read($, toolUsage)).sort((a, b) => b[1].tokens - a[1].tokens)
     const toolTotal = tools.reduce((sum, [, u]) => sum + u.tokens, 0)
@@ -520,6 +539,23 @@ export const register: Register = (on, options) => {
         <Text dimColor>
           {`агенты: ${totals.runs} запусков, ${formatTokens(totals.tokens)} токенов · «вх.» — цена в токенах обычного ввода (чтение ×0.05, запись ×2, вывод ×5)`}
         </Text>
+        <Text> </Text>
+
+        <Text weight="bold">Агенты</Text>
+        {agentRows.length === 0 ? (
+          <Text dimColor>Не запускались.</Text>
+        ) : (
+          agentRows.map((a, i) => (
+            <Text key={`agent-${i}`}>
+              <Text dimColor>{`${formatTime(a.startedAt, tz)}  `}</Text>
+              {`${clip(a.type, 16).padEnd(16)} ${clip(a.description || '—', 40).padEnd(40)} `}
+              <Text color={a.isRunning ? '#e5c000' : undefined} dimColor={!a.isRunning}>
+                {a.isRunning ? 'идёт ' : 'готов'}
+              </Text>
+              {`  ≈${formatTokens(a.tokens).padStart(5)}`}
+            </Text>
+          ))
+        )}
         <Text> </Text>
 
         <Text weight="bold">Что принесли в контекст инструменты</Text>

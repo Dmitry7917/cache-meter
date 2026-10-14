@@ -23,8 +23,15 @@ export type TurnRecord = {
 
 export type CacheLoss = { at: number; hitPercent: number; written: number; reason: string }
 
-/** A subagent run in progress: its tokens so far, all four counts summed. */
-export type AgentRun = { id: string; tokens: number }
+/** One subagent of this session: what it was asked, whether it runs, its tokens so far (all four counts summed). */
+export type AgentRecord = {
+  id: string
+  type: string
+  description: string
+  isRunning: boolean
+  startedAt: number
+  tokens: number
+}
 
 export type AgentTotals = { runs: number; tokens: number }
 
@@ -48,7 +55,7 @@ declare module 'claude-code' {
       compactedAt: number | null
       turns: TurnRecord[]
       losses: CacheLoss[]
-      agents: AgentRun[]
+      agentLog: AgentRecord[]
       agentTotals: AgentTotals
       tzOffsetMinutes: number
       toolUsage: Record<string, ToolUsage>

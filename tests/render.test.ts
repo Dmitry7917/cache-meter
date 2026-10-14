@@ -13,7 +13,10 @@ const seeded: Record<string, unknown> = {
     { kind: 'five_hour', percentUsed: 23, resetsAt: '2026-10-14T11:30:00Z' },
     { kind: 'seven_day', percentUsed: 81 },
   ],
-  agents: [{ id: 'a1', tokens: 340_000 }],
+  agentLog: [
+    { id: 'a1', type: 'Explore', description: 'find handleRequest callers', isRunning: true, startedAt: NOW, tokens: 340_000 },
+    { id: 'a2', type: 'Plan', description: 'draft the migration', isRunning: false, startedAt: NOW - 60_000, tokens: 160_000 },
+  ],
   turns: [
     { at: 0, requests: 3, tokens, agentRuns: 1, agentTokens: 340_000, contextTokens: 120_000 },
     { at: 60_000, requests: 1, tokens, agentRuns: 0, agentTokens: 0, contextTokens: 160_000 },
@@ -55,6 +58,8 @@ test('the band and the pane draw on terminal and desktop', async ($, on) => {
     })
     expect(await pane.find({ type: 'Text', text: /Самые дорогие ответы/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /смена модели/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /Explore\s+find handleRequest callers\s+идёт\s+≈\s*340k/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /Plan\s+draft the migration\s+готов\s+≈\s*160k/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^Read\s+≈\s*84k/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /22k  Read UserController\.php/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^UserController\.php  3×  ≈60k/ })).toBeDefined()

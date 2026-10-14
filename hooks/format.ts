@@ -190,7 +190,7 @@ export function baseName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1) || path
 }
 
-function clip(text: string, max: number): string {
+export function clip(text: string, max: number): string {
   const line = text.replace(/\s+/g, ' ').trim()
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
