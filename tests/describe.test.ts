@@ -2,6 +2,13 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   baseName,
+  cacheHitPercent,
+  cacheSavings,
+  dayKey,
+  dayLabel,
+  lastDays,
+  mergeDays,
+  sumDays,
   callLabel,
   keepBiggest,
   estimateTokens,
@@ -146,4 +153,18 @@ test('labels calls by what they read or ran', async () => {
 test('keeps the biggest results, biggest first', async () => {
   const r = (tokens: number) => ({ at: 0, label: `r${tokens}`, tokens })
   expect(keepBiggest([r(5), r(1)], r(3), 2).map(b => b.tokens)).toEqual([5, 3])
+})
+
+test('counts days in local time and sums sessions', async () => {
+  const day = { answers: 1, requests: 2, main: { input: 1, read: 100, write: 10, output: 1 }, agents: { input: 0, read: 0, write: 0, output: 0 }, service: { input: 0, read: 0, write: 0, output: 0 }, losses: 0, lostWritten: 0, compactions: 0 }
+  expect(dayKey(Date.parse('2026-10-13T22:30:00Z'), 180)).toBe('2026-10-14')
+  expect(dayKey(Date.parse('2026-10-13T22:30:00Z'), 0)).toBe('2026-10-13')
+  expect(dayLabel('2026-10-10')).toBe('сб 10.10')
+  expect(lastDays('2026-10-01', 3)).toEqual(['2026-09-29', '2026-09-30', '2026-10-01'])
+  const merged = mergeDays([{ '2026-10-14': day }, { '2026-10-14': day, '2026-10-13': day }])
+  expect(merged['2026-10-14']?.answers).toBe(2)
+  expect(sumDays(merged, ['2026-10-13', '2026-10-14', '2026-10-12']).requests).toBe(6)
+  expect(cacheHitPercent(day.main)).toBe(90)
+  // 100 read at 0.95 saved, 10 written at 1 more than input.
+  expect(cacheSavings(day.main)).toBe(85)
 })

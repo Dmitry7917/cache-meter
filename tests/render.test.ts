@@ -91,3 +91,42 @@ test('after a compaction the band marks the size as estimated and the cache as n
     await band.unmount()
   }
 })
+
+test('the stats pane sums every session by day and period', async ($, on) => {
+  const day = (answers: number, read: number) => ({
+    answers,
+    requests: answers * 2,
+    main: { input: 1_000, read, write: 10_000, output: 2_000 },
+    agents: { input: 0, read: 0, write: 0, output: 0 },
+    service: { input: 0, read: 0, write: 0, output: 0 },
+    losses: 1,
+    lostWritten: 150_000,
+    compactions: 0,
+  })
+  const stats: Record<string, unknown> = {
+    now: NOW,
+    tzOffsetMinutes: 180,
+    ownDays: { '2026-10-14': day(3, 100_000) },
+    otherDays: { '2026-10-14': day(2, 100_000), '2026-10-13': day(5, 400_000), '2026-09-01': day(9, 900_000) },
+  }
+  on('state.get', ($, e, next) =>
+    e.plugin === 'cache-meter' && e.key in stats ? { value: { value: stats[e.key], version: 1 } } : next(e),
+  )
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({
+      plugin: 'cache-meter',
+      surface,
+      component: 'Pane',
+      requestId: 'cache-stats',
+      props: { title: 'Cache stats', isFocused: true, bodyColumns: 160, placement: 'dock', scroll, view: {} },
+    })
+    expect(await pane.find({ type: 'Text', text: /^Сегодня\s+≈.* 5 ответов, 10 запр\. · hit 90%/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Вчера\s+≈.* 5 ответов/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^7 дней\s+≈.* 10 ответов/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^30 дней\s+≈.* 10 ответов/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /потери кэша 2 \(записано 300k\)/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^ср 14\.10/ })).toBeDefined()
+    await pane.unmount()
+  }
+})

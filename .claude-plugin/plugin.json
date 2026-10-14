@@ -1,7 +1,7 @@
 {
   "name": "cache-meter",
-  "version": "0.6.1",
-  "description": "Context size, prompt cache countdown, subscription limits and subagents above the prompt; per-answer token summary, history pane and /keepalive",
+  "version": "0.7.0",
+  "description": "Context size, prompt cache countdown, subscription limits and subagents above the prompt; per-answer token summary, history pane, per-day stats over all sessions and /keepalive",
   "types": "./types/index.d.ts",
   "userConfig": {
     "cacheTtl": {
@@ -61,6 +61,12 @@
       "title": "Warn when a file is read this many times",
       "description": "Toast when the same file has been read into the context this many times; 0 turns it off",
       "default": 3
+    },
+    "confirmExpiredK": {
+      "type": "number",
+      "title": "Ask before sending over an expired cache from (k tokens)",
+      "description": "When the cache has expired and the context is at least this many thousand tokens, ask before a message rewrites it, offering to compact first; 0 never asks",
+      "default": 100
     }
   }
 }

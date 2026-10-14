@@ -44,6 +44,21 @@ export type BigResult = { at: number; label: string; tokens: number }
 /** How often one file was read into the main context, and how much it brought. */
 export type FileReads = { reads: number; tokens: number }
 
+/**
+ * One local calendar day of one session: `main` the main thread's requests,
+ * `agents` the subagents', `service` keepalives and compactions.
+ */
+export type DayStats = {
+  answers: number
+  requests: number
+  main: Tokens
+  agents: Tokens
+  service: Tokens
+  losses: number
+  lostWritten: number
+  compactions: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'cache-meter': {
@@ -62,6 +77,10 @@ declare module 'claude-code' {
       autoCredits: number
       bigResults: BigResult[]
       fileReads: Record<string, FileReads>
+      /** This session's days, as last written to the store. */
+      ownDays: Record<string, DayStats>
+      /** Every other session's days, summed, as read from the store when /cache-stats opened. */
+      otherDays: Record<string, DayStats>
     }
   }
 }

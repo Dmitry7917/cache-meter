@@ -1,4 +1,4 @@
-import type { BigResult, CacheHit, Tokens, TurnRecord } from '../types'
+import type { BigResult, CacheHit, DayStats, Tokens, TurnRecord } from '../types'
 
 export const GREEN = '#4caf50'
 export const YELLOW = '#e5c000'
@@ -210,4 +210,78 @@ export function callLabel(tool: string, input: Readonly<Record<string, unknown>>
 /** Keeps the `limit` biggest results, biggest first. */
 export function keepBiggest(list: readonly BigResult[], next: BigResult, limit: number): BigResult[] {
   return [...list, next].sort((a, b) => b.tokens - a.tokens).slice(0, limit)
+}
+
+export const NO_DAY: DayStats = {
+  answers: 0,
+  requests: 0,
+  main: NO_TOKENS,
+  agents: NO_TOKENS,
+  service: NO_TOKENS,
+  losses: 0,
+  lostWritten: 0,
+  compactions: 0,
+}
+
+export function addDay(a: DayStats, b: DayStats): DayStats {
+  return {
+    answers: a.answers + b.answers,
+    requests: a.requests + b.requests,
+    main: addTokens(a.main, b.main),
+    agents: addTokens(a.agents, b.agents),
+    service: addTokens(a.service, b.service),
+    losses: a.losses + b.losses,
+    lostWritten: a.lostWritten + b.lostWritten,
+    compactions: a.compactions + b.compactions,
+  }
+}
+
+/** Everything a day's requests read, wrote and produced, main thread, subagents and service requests together. */
+export function dayTokens(d: DayStats): Tokens {
+  return addTokens(addTokens(d.main, d.agents), d.service)
+}
+
+/** The local calendar date of `ms`: `2026-10-14`. */
+export function dayKey(ms: number, tzOffsetMinutes: number): string {
+  return local(ms, tzOffsetMinutes).toISOString().slice(0, 10)
+}
+
+/** `пт 10.10` for a `2026-10-10` day key. */
+export function dayLabel(key: string): string {
+  const d = new Date(`${key}T00:00:00Z`)
+  return `${WEEKDAYS[d.getUTCDay()]} ${key.slice(8, 10)}.${key.slice(5, 7)}`
+}
+
+/** The day keys from `days` days before `today` up to `today`, oldest first. */
+export function lastDays(today: string, days: number): string[] {
+  const end = Date.parse(`${today}T00:00:00Z`)
+  return Array.from({ length: days }, (_, i) => new Date(end - (days - 1 - i) * 86_400_000).toISOString().slice(0, 10))
+}
+
+/** Several sessions' day maps summed into one. */
+export function mergeDays(maps: readonly Readonly<Record<string, DayStats>>[]): Record<string, DayStats> {
+  const merged: Record<string, DayStats> = {}
+  for (const map of maps) {
+    for (const [key, day] of Object.entries(map)) merged[key] = addDay(merged[key] ?? NO_DAY, day)
+  }
+  return merged
+}
+
+/** The days of `keys` summed. */
+export function sumDays(days: Readonly<Record<string, DayStats>>, keys: readonly string[]): DayStats {
+  return keys.reduce((sum, key) => addDay(sum, days[key] ?? NO_DAY), NO_DAY)
+}
+
+/** Share of the prompt read from the cache, 0 to 100. */
+export function cacheHitPercent(t: Tokens): number {
+  const prompt = t.input + t.read + t.write
+  return prompt === 0 ? 0 : Math.round((t.read / prompt) * 100)
+}
+
+/**
+ * What the cache saved against sending every prompt uncached, in input tokens:
+ * reads cost less than input, writes cost more.
+ */
+export function cacheSavings(t: Tokens): number {
+  return t.read * (WEIGHT.input - WEIGHT.read) - t.write * (WEIGHT.write - WEIGHT.input)
 }
