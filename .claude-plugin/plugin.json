@@ -1,6 +1,6 @@
 {
   "name": "cache-meter",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Context size, prompt cache countdown, subscription limits and subagents above the prompt; per-answer token summary, history pane, per-day stats over all sessions and /keepalive",
   "types": "./types/index.d.ts",
   "userConfig": {

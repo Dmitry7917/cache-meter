@@ -219,6 +219,13 @@ async function openPane($: EngineInterface): Promise<void> {
   await $.ui.open({ id: PANE, title: 'Cache meter' })
 }
 
+/** Reads every other session's days from the store, then opens the stats pane. */
+async function openStats($: EngineInterface): Promise<void> {
+  const others = await loadOtherDays($)
+  await update($, otherDays, () => others)
+  await $.ui.open({ id: STATS_PANE, title: 'Cache stats' })
+}
+
 /** Puts a message that was not sent back into the prompt box, once the box is free again. */
 function restoreDraft($: EngineInterface, text: string): void {
   $.clock.after(200, () => void $.prompt.fill({ text }))
@@ -451,9 +458,7 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'cache-stats' }, async $ => {
-    const others = await loadOtherDays($)
-    await update($, otherDays, () => others)
-    await $.ui.open({ id: STATS_PANE, title: 'Cache stats' })
+    await openStats($)
     return { text: 'Панель статистики по дням открыта.' }
   })
 
@@ -700,15 +705,32 @@ export const register: Register = (on, options) => {
         )
     }
 
-    const limitRuns = rateLimits.map(r => {
+    // The weekly limit is a plain button that opens /cache-stats; the rest is text.
+    const limitRuns = rateLimits.flatMap(r => {
       const reset = r.resetsAt === undefined ? null : formatReset(r.resetsAt, now, tz)
-      return (
+      const value = (
         <Text key={`limit-${r.kind}`}>
-          <Text dimColor>{` · ${limitLabel(r.kind)} `}</Text>
+          <Text dimColor>{`${limitLabel(r.kind)} `}</Text>
           <Text color={limitColor(r.percentUsed)}>{`${r.percentUsed}%`}</Text>
-          {reset === null ? '' : <Text dimColor>{` до ${reset}`}</Text>}
         </Text>
       )
+      return [
+        <Text key={`limit-sep-${r.kind}`} dimColor>
+          {' · '}
+        </Text>,
+        r.kind === 'seven_day' ? (
+          <Button key="open-stats" label="Открыть cache-stats" plain onPress={() => void openStats($)}>
+            {value}
+          </Button>
+        ) : (
+          value
+        ),
+        reset === null ? null : (
+          <Text key={`limit-reset-${r.kind}`} dimColor>
+            {` до ${reset}`}
+          </Text>
+        ),
+      ]
     })
 
     const agentRun =
@@ -721,18 +743,18 @@ export const register: Register = (on, options) => {
         </Text>
       )
 
-    // The whole band is one plain button: a click opens the pane, as /cache-meter does.
+    // The context line and its size are a plain button: a click opens the pane, as /cache-meter does.
     return (
       <Box>
         <Button key="open-pane" label="Открыть cache-meter" plain onPress={() => void openPane($)}>
-          <Text>
-            {ctx}
-            <Text dimColor> · </Text>
-            {cache}
-            {limitRuns}
-            {agentRun}
-          </Text>
+          {ctx}
         </Button>
+        <Text>
+          <Text dimColor> · </Text>
+          {cache}
+        </Text>
+        {limitRuns}
+        <Text>{agentRun}</Text>
       </Box>
     )
   })

@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const scroll = { offset: 0, bodyRows: 40 }
 const tokens = { input: 1_000, read: 100_000, write: 10_000, output: 2_000 }
@@ -159,7 +159,9 @@ test('the stats pane sums every session by day and period', async ($, on) => {
   }
 })
 
-test('a click on the band opens the pane', async ($, on) => {
+test('a click on the context opens the pane, on the weekly limit the stats', async ($, on) => {
+  mock.store(on)
+  mock.clock(on, { now: NOW })
   on('state.get', ($, e, next) =>
     e.plugin === 'cache-meter' && e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e),
   )
@@ -174,7 +176,8 @@ test('a click on the band opens the pane', async ($, on) => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll, view: {} },
     })
     await band.press({ key: 'open-pane' })
+    await band.press({ key: 'open-stats' })
     await band.unmount()
   }
-  expect(opened).toEqual(['cache-meter', 'cache-meter'])
+  expect(opened).toEqual(['cache-meter', 'cache-stats', 'cache-meter', 'cache-stats'])
 })
