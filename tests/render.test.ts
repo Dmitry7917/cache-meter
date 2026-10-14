@@ -158,3 +158,23 @@ test('the stats pane sums every session by day and period', async ($, on) => {
     await pane.unmount()
   }
 })
+
+test('a click on the band opens the pane', async ($, on) => {
+  on('state.get', ($, e, next) =>
+    e.plugin === 'cache-meter' && e.key in seeded ? { value: { value: seeded[e.key], version: 1 } } : next(e),
+  )
+  const opened: string[] = []
+  on('ui.open', ($, e) => (opened.push(e.id), { value: { isPlaced: true } }))
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({
+      plugin: 'cache-meter',
+      surface,
+      component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll, view: {} },
+    })
+    await band.press({ key: 'open-pane' })
+    await band.unmount()
+  }
+  expect(opened).toEqual(['cache-meter', 'cache-meter'])
+})

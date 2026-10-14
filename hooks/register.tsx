@@ -215,6 +215,10 @@ async function askOverExpired(
   return { drop: 'Сообщение не отправлено и возвращено в поле ввода.' }
 }
 
+async function openPane($: EngineInterface): Promise<void> {
+  await $.ui.open({ id: PANE, title: 'Cache meter' })
+}
+
 /** Puts a message that was not sent back into the prompt box, once the box is free again. */
 function restoreDraft($: EngineInterface, text: string): void {
   $.clock.after(200, () => void $.prompt.fill({ text }))
@@ -442,7 +446,7 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'cache-meter' }, async $ => {
-    await $.ui.open({ id: PANE, title: 'Cache meter' })
+    await openPane($)
     return { text: 'Панель cache-meter открыта.' }
   })
 
@@ -647,7 +651,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const fill = await read($, contextFill)
     const hit = await read($, last)
     const now = await read($, clockNow)
@@ -717,15 +721,18 @@ export const register: Register = (on, options) => {
         </Text>
       )
 
+    // The whole band is one plain button: a click opens the pane, as /cache-meter does.
     return (
       <Box>
-        <Text>
-          {ctx}
-          <Text dimColor> · </Text>
-          {cache}
-          {limitRuns}
-          {agentRun}
-        </Text>
+        <Button key="open-pane" label="Открыть cache-meter" plain onPress={() => void openPane($)}>
+          <Text>
+            {ctx}
+            <Text dimColor> · </Text>
+            {cache}
+            {limitRuns}
+            {agentRun}
+          </Text>
+        </Button>
       </Box>
     )
   })
