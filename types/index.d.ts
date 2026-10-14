@@ -4,7 +4,8 @@ export type CacheHit = {
   model: string
   effort?: string | number
 }
-export type ContextFill = { tokens: number; window: number; percent: number }
+/** `isEstimate`: counted locally after a compaction, until the next response reports the real size. */
+export type ContextFill = { tokens: number; window: number; percent: number; isEstimate?: boolean }
 export type RateLimitFill = { kind: string; percentUsed: number; resetsAt?: string }
 
 /** Token counts summed over requests: uncached input, cache read, cache write, output. */

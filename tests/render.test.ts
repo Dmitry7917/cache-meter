@@ -61,3 +61,28 @@ test('the band and the pane draw on terminal and desktop', async ($, on) => {
     await pane.unmount()
   }
 })
+
+test('after a compaction the band marks the size as estimated and the cache as not yet written', async ($, on) => {
+  const afterCompact: Record<string, unknown> = {
+    context: { tokens: 42_000, window: 1_000_000, percent: 4, isEstimate: true },
+    last: null,
+    now: NOW,
+  }
+  on('state.get', ($, e, next) =>
+    e.plugin === 'cache-meter' && e.key in afterCompact
+      ? { value: { value: afterCompact[e.key], version: 1 } }
+      : next(e),
+  )
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({
+      plugin: 'cache-meter',
+      surface,
+      component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll, view: {} },
+    })
+    expect(await band.find({ type: 'Text', text: /≈42k\/1M \(4%\)/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /после сжатия запишется с первым запросом/ })).toBeDefined()
+    await band.unmount()
+  }
+})

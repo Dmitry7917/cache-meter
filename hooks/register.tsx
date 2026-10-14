@@ -277,11 +277,23 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // No turn ends at a compaction, so no session.measure follows it: the band
+  // would keep the old size until the next answer. Count the new size locally,
+  // and drop the cache countdown, since the compacted prefix is not cached yet.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined) {
-      const at = await $.clock.now()
-      await update($, compactedAt, () => at)
+    if (e.agentId !== undefined || e.trigger === 'precompute' || result.messages === undefined) return result
+
+    const at = await $.clock.now()
+    await update($, compactedAt, () => at)
+    await update($, last, () => null)
+
+    const usage = await $.session.usage({ breakdown: 'summary' })
+    const tokens = usage.context.breakdown?.totalTokens ?? result.tokensAfter
+    if (tokens !== undefined) {
+      const window = usage.context.window
+      const fill: ContextFill = { tokens, window, percent: Math.round((tokens / window) * 100), isEstimate: true }
+      await update($, contextFill, () => fill)
     }
     return result
   }).catch(($, e, next) => next(e))
@@ -396,13 +408,14 @@ export const register: Register = (on, options) => {
           <Text key="bar" color={contextColor(fill.tokens, thresholds)}>
             {formatBar(fill.tokens / fill.window)}
           </Text>
-          {` ${formatTokens(fill.tokens)}/${formatTokens(fill.window)} (${fill.percent}%)`}
+          {` ${fill.isEstimate === true ? '≈' : ''}${formatTokens(fill.tokens)}/${formatTokens(fill.window)} (${fill.percent}%)`}
         </Text>
       )
 
     let cache
     if (hit === null) {
-      cache = <Text dimColor>{label}—</Text>
+      const after = fill?.isEstimate === true ? ' (после сжатия запишется с первым запросом)' : ''
+      cache = <Text dimColor>{`${label}—${after}`}</Text>
     } else {
       const left = hit.at + settings.ttlMs - now
       const color = cacheColor(left, settings.ttlMs)
