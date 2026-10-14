@@ -25,6 +25,9 @@ import {
   limitColor,
   limitLabel,
   contextColor,
+  contextGradient,
+  gradientColor,
+  joinCells,
   formatBar,
   formatClock,
   formatTokens,
@@ -167,4 +170,20 @@ test('counts days in local time and sums sessions', async () => {
   expect(cacheHitPercent(day.main)).toBe(90)
   // 100 read at 0.95 saved, 10 written at 1 more than input.
   expect(cacheSavings(day.main)).toBe(85)
+})
+
+test('draws the context as a gradient with each zone dashed ahead', async () => {
+  const t = { yellow: 200_000, orange: 300_000, red: 400_000 }
+  expect(gradientColor(0, t)).toBe(GREEN)
+  expect(gradientColor(200_000, t)).toBe(YELLOW)
+  expect(gradientColor(400_000, t)).toBe(RED)
+  expect(gradientColor(900_000, t)).toBe(RED)
+
+  const cells = contextGradient(250_000, t)
+  expect(cells).toHaveLength(25)
+  expect(cells.filter(c => c.isFilled)).toHaveLength(13)
+  expect(cells.slice(13).map(c => c.color)).toEqual([...Array(2).fill(YELLOW), ...Array(5).fill(ORANGE), ...Array(5).fill(RED)])
+  expect(joinCells(cells.slice(13)).map(r => r.char)).toEqual(['╌╌', '╌╌╌╌╌', '╌╌╌╌╌'])
+  expect(contextGradient(600_000, t).every(c => c.isFilled)).toBe(true)
+  expect(contextGradient(0, t).some(c => c.isFilled)).toBe(false)
 })

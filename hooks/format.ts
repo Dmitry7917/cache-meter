@@ -315,3 +315,69 @@ export function latestDay(projects: ProjectDays): string | null {
   const keys = Object.values(projects).flatMap(days => Object.keys(days))
   return keys.length === 0 ? null : keys.reduce((a, b) => (a > b ? a : b))
 }
+
+/** One cell of the context gradient: what it shows and in which colour. */
+export type GradientCell = { char: string; color: string; isFilled: boolean }
+
+const GRADIENT_CELLS = 25
+const FILLED = '━'
+const EMPTY = '╌'
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function mix(a: string, b: string, t: number): string {
+  const [ar, ag, ab] = hexToRgb(a)
+  const [br, bg, bb] = hexToRgb(b)
+  const c = (x: number, y: number) => Math.round(x + (y - x) * t).toString(16).padStart(2, '0')
+  return `#${c(ar, br)}${c(ag, bg)}${c(ab, bb)}`
+}
+
+/** The colour at `tokens` on a smooth scale: green at 0, then yellow, orange and red at their thresholds. */
+export function gradientColor(tokens: number, t: ContextThresholds): string {
+  const stops: [number, string][] = [
+    [0, GREEN],
+    [t.yellow, YELLOW],
+    [t.orange, ORANGE],
+    [t.red, RED],
+  ]
+  for (let i = 1; i < stops.length; i++) {
+    const [at, color] = stops[i]!
+    const [from, fromColor] = stops[i - 1]!
+    if (tokens <= at) return mix(fromColor, color, at === from ? 1 : (tokens - from) / (at - from))
+  }
+  return RED
+}
+
+/**
+ * The context as a line from 0 to a zone past red: filled cells in the
+ * smooth gradient, empty ones dashed in their zone's own colour, so every
+ * boundary shows before the context reaches it.
+ */
+export function contextGradient(tokens: number, t: ContextThresholds, cells = GRADIENT_CELLS): GradientCell[] {
+  const end = t.red + (t.red - t.orange)
+  const step = end / cells
+  return Array.from({ length: cells }, (_, i) => {
+    const mid = (i + 0.5) * step
+    const isFilled = tokens >= mid || (i === cells - 1 && tokens >= end)
+    return isFilled
+      ? { char: FILLED, color: gradientColor(mid, t), isFilled }
+      : { char: EMPTY, color: contextColor(mid, t), isFilled }
+  })
+}
+
+/** Neighbouring cells of one colour and fill joined, so a line is a few runs, not one element a cell. */
+export function joinCells(cells: readonly GradientCell[]): GradientCell[] {
+  const runs: GradientCell[] = []
+  for (const cell of cells) {
+    const prev = runs[runs.length - 1]
+    if (prev !== undefined && prev.color === cell.color && prev.isFilled === cell.isFilled) {
+      runs[runs.length - 1] = { ...prev, char: prev.char + cell.char }
+    } else {
+      runs.push({ ...cell })
+    }
+  }
+  return runs
+}

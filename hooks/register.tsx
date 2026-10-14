@@ -35,6 +35,7 @@ import {
   cacheColor,
   cacheLossReason,
   contextColor,
+  contextGradient,
   dayKey,
   dayLabel,
   dayTokens,
@@ -45,6 +46,7 @@ import {
   formatTime,
   formatTokens,
   inputEquivalent,
+  joinCells,
   keepBiggest,
   lastDays,
   latestDay,
@@ -660,9 +662,11 @@ export const register: Register = (on, options) => {
       ) : (
         <Text>
           <Text dimColor>ctx </Text>
-          <Text key="bar" color={contextColor(fill.tokens, thresholds)}>
-            {formatBar(fill.tokens / fill.window)}
-          </Text>
+          {joinCells(contextGradient(fill.tokens, thresholds)).map((run, i) => (
+            <Text key={`bar-${i}`} color={run.color} dimColor={!run.isFilled}>
+              {run.char}
+            </Text>
+          ))}
           {` ${fill.isEstimate === true ? '≈' : ''}${formatTokens(fill.tokens)}/${formatTokens(fill.window)} (${fill.percent}%)`}
         </Text>
       )
