@@ -1,4 +1,4 @@
-import type { BigResult, CacheHit, DayStats, ProjectDays, Tokens, TurnRecord } from '../types'
+import type { AgentTypeDay, BigResult, CacheHit, DayStats, ProjectDays, Tokens, TurnRecord } from '../types'
 
 export const GREEN = '#4caf50'
 export const YELLOW = '#e5c000'
@@ -223,8 +223,35 @@ export const NO_DAY: DayStats = {
   compactions: 0,
 }
 
+function mergeTokenMaps(
+  a: Readonly<Record<string, Tokens>> | undefined,
+  b: Readonly<Record<string, Tokens>> | undefined,
+): Record<string, Tokens> | undefined {
+  if (a === undefined || b === undefined) return a ?? b
+  const merged: Record<string, Tokens> = { ...a }
+  for (const [key, tokens] of Object.entries(b)) merged[key] = addTokens(merged[key] ?? NO_TOKENS, tokens)
+  return merged
+}
+
+function mergeAgentTypes(
+  a: Readonly<Record<string, AgentTypeDay>> | undefined,
+  b: Readonly<Record<string, AgentTypeDay>> | undefined,
+): Record<string, AgentTypeDay> | undefined {
+  if (a === undefined || b === undefined) return a ?? b
+  const merged: Record<string, AgentTypeDay> = { ...a }
+  for (const [key, day] of Object.entries(b)) {
+    const was = merged[key] ?? { runs: 0, tokens: NO_TOKENS }
+    merged[key] = { runs: was.runs + day.runs, tokens: addTokens(was.tokens, day.tokens) }
+  }
+  return merged
+}
+
 export function addDay(a: DayStats, b: DayStats): DayStats {
+  const models = mergeTokenMaps(a.models, b.models)
+  const agentTypes = mergeAgentTypes(a.agentTypes, b.agentTypes)
   return {
+    ...(models === undefined ? {} : { models }),
+    ...(agentTypes === undefined ? {} : { agentTypes }),
     answers: a.answers + b.answers,
     requests: a.requests + b.requests,
     main: addTokens(a.main, b.main),
@@ -234,6 +261,44 @@ export function addDay(a: DayStats, b: DayStats): DayStats {
     lostWritten: a.lostWritten + b.lostWritten,
     compactions: a.compactions + b.compactions,
   }
+}
+
+/** A day with `tokens` added to what `model` answered; an unknown model ('') is left out. */
+export function withModel(d: DayStats, model: string, tokens: Tokens): DayStats {
+  if (model === '') return d
+  return { ...d, models: mergeTokenMaps(d.models ?? {}, { [model]: tokens }) }
+}
+
+/** A day with `runs` more runs and `tokens` more spent by subagents of `type`. */
+export function withAgentType(d: DayStats, type: string, runs: number, tokens: Tokens): DayStats {
+  return { ...d, agentTypes: mergeAgentTypes(d.agentTypes ?? {}, { [type]: { runs, tokens } }) }
+}
+
+/** `claude-opus-5-5` → `Opus 5.5`, `claude-haiku-4-5-20251001` → `Haiku 4.5`; anything else as it is. */
+export function modelLabel(id: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[[^\]]*\])?$/.exec(id)
+  if (m === null) return id
+  const family = m[1] ?? ''
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${m[2]}${m[3] === undefined ? '' : `.${m[3]}`}`
+}
+
+/** A period's tokens by model, ids of one model joined under its label, costliest first. */
+export function modelRows(d: DayStats): { label: string; tokens: Tokens }[] {
+  const byLabel = new Map<string, Tokens>()
+  for (const [id, tokens] of Object.entries(d.models ?? {})) {
+    const label = modelLabel(id)
+    byLabel.set(label, addTokens(byLabel.get(label) ?? NO_TOKENS, tokens))
+  }
+  return [...byLabel]
+    .map(([label, tokens]) => ({ label, tokens }))
+    .sort((a, b) => inputEquivalent(b.tokens) - inputEquivalent(a.tokens))
+}
+
+/** A period's subagent types, costliest first. */
+export function agentTypeRows(d: DayStats): ({ type: string } & AgentTypeDay)[] {
+  return Object.entries(d.agentTypes ?? {})
+    .map(([type, day]) => ({ type, ...day }))
+    .sort((a, b) => inputEquivalent(b.tokens) - inputEquivalent(a.tokens))
 }
 
 /** Everything a day's requests read, wrote and produced, main thread, subagents and service requests together. */

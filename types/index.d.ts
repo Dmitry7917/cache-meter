@@ -44,9 +44,14 @@ export type BigResult = { at: number; label: string; tokens: number }
 /** How often one file was read into the main context, and how much it brought. */
 export type FileReads = { reads: number; tokens: number }
 
+/** One subagent type's day: how many runs it started, and what all its requests read, wrote and produced. */
+export type AgentTypeDay = { runs: number; tokens: Tokens }
+
 /**
  * One local calendar day of one session: `main` the main thread's requests,
  * `agents` the subagents', `service` keepalives and compactions.
+ * `models` splits all of them by the model that answered, `agentTypes` the
+ * subagents by type; both counted since 0.11.0, absent in days stored before.
  */
 export type DayStats = {
   answers: number
@@ -57,6 +62,8 @@ export type DayStats = {
   losses: number
   lostWritten: number
   compactions: number
+  models?: Record<string, Tokens>
+  agentTypes?: Record<string, AgentTypeDay>
 }
 
 /** Days by project root, each day by its local date: what one session, or every other summed, spent where. */

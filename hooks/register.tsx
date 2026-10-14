@@ -26,6 +26,7 @@ import type {
 import {
   addTokens,
   addDay,
+  agentTypeRows,
   allDays,
   baseName,
   cacheHitPercent,
@@ -53,6 +54,7 @@ import {
   limitColor,
   limitLabel,
   mergeProjects,
+  modelRows,
   NO_DAY,
   NO_TOKENS,
   parseTzOffset,
@@ -63,6 +65,8 @@ import {
   toolGroup,
   totalTokens,
   turnSummary,
+  withAgentType,
+  withModel,
 } from './format'
 import type { ContextThresholds } from './format'
 
@@ -166,9 +170,14 @@ async function measureCompacted($: EngineInterface, before: number | null, attem
 async function afterCompact($: EngineInterface, before: number | null, usage: Tokens | null): Promise<void> {
   isCompactHandled = true
   const at = await $.clock.now()
+  // The summary is written by the model the conversation runs on.
+  const model = (await read($, last))?.model ?? ''
   await update($, compactedAt, () => at)
   await update($, last, () => null)
-  await recordDay($, d => ({ ...d, compactions: d.compactions + 1, service: usage === null ? d.service : addTokens(d.service, usage) }))
+  await recordDay($, d => {
+    const counted = { ...d, compactions: d.compactions + 1 }
+    return usage === null ? counted : withModel({ ...counted, service: addTokens(d.service, usage) }, model, usage)
+  })
   $.clock.after(COMPACT_POLL_MS, () => void measureCompacted($, before, 1))
 }
 
@@ -366,7 +375,8 @@ async function keepalive($: EngineInterface, settings: Settings): Promise<Keepal
   }
 
   const u = reply.usage
-  await recordDay($, d => ({ ...d, service: addTokens(d.service, usageTokens(u)) }))
+  // A fork answers on the conversation's model.
+  await recordDay($, d => withModel({ ...d, service: addTokens(d.service, usageTokens(u)) }, prev?.model ?? '', usageTokens(u)))
   const prompt = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
   const hitPercent = prompt === 0 ? 0 : Math.round((u.cache_read_input_tokens / prompt) * 100)
   const failure = reply.isAnswered ? '' : ` (запрос завершился: ${reply.reason})`
@@ -569,6 +579,7 @@ export const register: Register = (on, options) => {
         await update($, agentLog, list => [...list, record].slice(-50))
         await update($, agentTotals, t => ({ ...t, runs: t.runs + 1 }))
         if (currentTurnId !== null) tallyOf(currentTurnId).agentRuns += 1
+        await recordDay($, d => withAgentType(d, record.type, 1, NO_TOKENS))
       }
     }
     return next(e)
@@ -589,7 +600,8 @@ export const register: Register = (on, options) => {
       await update($, agentLog, list => list.map(a => (a.id === e.agentId ? { ...a, tokens: a.tokens + spent } : a)))
       await update($, agentTotals, t => ({ ...t, tokens: t.tokens + spent }))
       if (currentTurnId !== null) tallyOf(currentTurnId).agentTokens += spent
-      await recordDay($, d => ({ ...d, agents: addTokens(d.agents, tokens) }))
+      const type = (await read($, agentLog)).find(a => a.id === e.agentId)?.type ?? 'agent'
+      await recordDay($, d => withAgentType(withModel({ ...d, agents: addTokens(d.agents, tokens) }, u.model, tokens), type, 0, tokens))
       return result
     }
 
@@ -614,13 +626,19 @@ export const register: Register = (on, options) => {
     }
 
     await update($, last, () => hit)
-    await recordDay($, d => ({
-      ...d,
-      requests: d.requests + 1,
-      main: addTokens(d.main, tokens),
-      losses: d.losses + (reason === null ? 0 : 1),
-      lostWritten: d.lostWritten + (reason === null ? 0 : tokens.write),
-    }))
+    await recordDay($, d =>
+      withModel(
+        {
+          ...d,
+          requests: d.requests + 1,
+          main: addTokens(d.main, tokens),
+          losses: d.losses + (reason === null ? 0 : 1),
+          lostWritten: d.lostWritten + (reason === null ? 0 : tokens.write),
+        },
+        u.model,
+        tokens,
+      ),
+    )
     return result
   })
 
@@ -961,6 +979,12 @@ export const register: Register = (on, options) => {
       .filter(p => p.month > 0)
       .sort((a, b) => b.month - a.month)
       .slice(0, 10)
+    const weekTotal = sumDays(days, week)
+    const monthTotal = sumDays(days, month)
+    const monthModels = modelRows(monthTotal)
+    const weekModels = new Map(modelRows(weekTotal).map(m => [m.label, m.tokens]))
+    const monthModelsCost = Math.max(1, monthModels.reduce((sum, m) => sum + inputEquivalent(m.tokens), 0))
+    const agentTypes = agentTypeRows(monthTotal).slice(0, 10)
     const perDay = recent.map(key => ({ key, cost: inputEquivalent(dayTokens(days[key] ?? NO_DAY)), day: days[key] ?? NO_DAY }))
     const top = Math.max(1, ...perDay.map(d => d.cost))
 
@@ -1000,6 +1024,45 @@ export const register: Register = (on, options) => {
         )}
         <Text> </Text>
 
+        <Text weight="bold">По моделям</Text>
+        {monthModels.length === 0 ? (
+          <Text dimColor>—</Text>
+        ) : (
+          [
+            <Text key="model-head" dimColor>{`${''.padEnd(24)}${'7 дней'.padStart(9)}${'30 дней'.padStart(9)}${'доля'.padStart(7)}${'hit'.padStart(7)}`}</Text>,
+            ...monthModels.map((m, i) => {
+              const week = weekModels.get(m.label)
+              const cost = inputEquivalent(m.tokens)
+              return (
+                <Text key={`model-${i}`}>
+                  {`${clip(m.label, 22).padEnd(24)}${(week === undefined ? '—' : `≈${formatTokens(inputEquivalent(week))}`).padStart(9)}${`≈${formatTokens(cost)}`.padStart(9)}`}
+                  <Text dimColor>{`${`${Math.round((cost / monthModelsCost) * 100)}%`.padStart(7)}${`${cacheHitPercent(m.tokens)}%`.padStart(7)}`}</Text>
+                </Text>
+              )
+            }),
+          ]
+        )}
+        <Text> </Text>
+
+        <Text weight="bold">Субагенты по типам, 30 дней</Text>
+        {agentTypes.length === 0 ? (
+          <Text dimColor>—</Text>
+        ) : (
+          [
+            <Text key="type-head" dimColor>{`${''.padEnd(24)}${'запусков'.padStart(9)}${'всего'.padStart(9)}${'за запуск'.padStart(11)}${'hit'.padStart(7)}`}</Text>,
+            ...agentTypes.map((a, i) => {
+              const cost = inputEquivalent(a.tokens)
+              return (
+                <Text key={`type-${i}`}>
+                  {`${clip(a.type, 22).padEnd(24)}${`${a.runs}`.padStart(9)}${`≈${formatTokens(cost)}`.padStart(9)}${(a.runs === 0 ? '—' : `≈${formatTokens(Math.round(cost / a.runs))}`).padStart(11)}`}
+                  <Text dimColor>{`${cacheHitPercent(a.tokens)}%`.padStart(7)}</Text>
+                </Text>
+              )
+            }),
+          ]
+        )}
+        <Text> </Text>
+
         <Text weight="bold">По дням</Text>
         {perDay.map((d, i) => (
           <Text key={`day-${i}`}>
@@ -1015,7 +1078,7 @@ export const register: Register = (on, options) => {
         ))}
         <Text> </Text>
         <Text dimColor>
-          все сессии, учёт с версии 0.7.0 · «вх.» — цена в токенах обычного ввода (чтение ×0.05, запись ×2, вывод ×5) · другие сессии прочитаны при открытии, текущая обновляется сама
+          все сессии, учёт с версии 0.7.0, модели и типы субагентов — с 0.11.0 · «вх.» — цена в токенах обычного ввода (чтение ×0.05, запись ×2, вывод ×5) · другие сессии прочитаны при открытии, текущая обновляется сама
         </Text>
       </Box>
     )

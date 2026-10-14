@@ -9,6 +9,14 @@ import {
   lastDays,
   mergeDays,
   sumDays,
+  addDay,
+  agentTypeRows,
+  modelLabel,
+  modelRows,
+  NO_DAY,
+  NO_TOKENS,
+  withAgentType,
+  withModel,
   callLabel,
   keepBiggest,
   estimateTokens,
@@ -170,6 +178,30 @@ test('counts days in local time and sums sessions', async () => {
   expect(cacheHitPercent(day.main)).toBe(90)
   // 100 read at 0.95 saved, 10 written at 1 more than input.
   expect(cacheSavings(day.main)).toBe(85)
+})
+
+test('splits days by model and subagent type, and reads days stored before without them', async () => {
+  const t = { input: 1_000, read: 100_000, write: 10_000, output: 2_000 }
+  expect(modelLabel('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelLabel('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+  expect(modelLabel('claude-sonnet-5-5[1m]')).toBe('Sonnet 5.5')
+  expect(modelLabel('claude-opus-4')).toBe('Opus 4')
+  expect(modelLabel('gpt-x')).toBe('gpt-x')
+
+  // The same model under two ids is one row.
+  let day = withModel(withModel(NO_DAY, 'claude-opus-5-5', t), 'claude-opus-5-5[1m]', t)
+  day = withModel(day, 'claude-haiku-4-5-20251001', t)
+  day = withModel(day, '', t)
+  day = withAgentType(withAgentType(day, 'Explore', 1, NO_TOKENS), 'Explore', 0, t)
+  day = withAgentType(day, 'Plan', 1, { ...t, output: 0 })
+  expect(modelRows(day).map(m => [m.label, m.tokens.read])).toEqual([['Opus 5.5', 200_000], ['Haiku 4.5', 100_000]])
+  expect(agentTypeRows(day).map(a => [a.type, a.runs])).toEqual([['Explore', 1], ['Plan', 1]])
+
+  // A day from before 0.11.0 has neither map: summing keeps the other day's.
+  const sum = addDay(day, NO_DAY)
+  expect(sum.models?.['claude-opus-5-5']?.read).toBe(100_000)
+  expect(addDay(sum, day).agentTypes?.Explore?.runs).toBe(2)
+  expect(addDay(NO_DAY, NO_DAY).models).toBeUndefined()
 })
 
 test('draws the context as a gradient with each zone dashed ahead', async () => {

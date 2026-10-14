@@ -129,7 +129,14 @@ test('the stats pane sums every session by day and period', async ($, on) => {
     // As 0.7.0 left it: bare days.
     ownDays: { '2026-10-14': day(3, 100_000) },
     otherDays: {
-      '/work/mp-ranker-back': { '2026-10-14': day(2, 100_000), '2026-10-13': day(5, 400_000) },
+      '/work/mp-ranker-back': {
+        '2026-10-14': {
+          ...day(2, 100_000),
+          models: { 'claude-opus-5-5': tokens, 'claude-haiku-4-5-20251001': { ...tokens, write: 0 } },
+          agentTypes: { Explore: { runs: 4, tokens: { ...tokens, write: 0 } } },
+        },
+        '2026-10-13': day(5, 400_000),
+      },
       '/work/cache-meter': { '2026-09-01': day(9, 900_000) },
     },
   }
@@ -153,6 +160,9 @@ test('the stats pane sums every session by day and period', async ($, on) => {
     expect(await pane.find({ type: 'Text', text: /^ср 14\.10/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^mp-ranker-back\s+≈\S+\s+≈\S+\s+≈/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^\(без проекта\)/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Opus 5\.5\s+≈\S+\s+≈\S+/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Haiku 4\.5\s+≈/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Explore\s+4\s+≈\S+\s+≈/ })).toBeDefined()
     // Older than 30 days: not among the projects.
     expect(await pane.find({ type: 'Text', text: /^cache-meter\s/ })).toBeUndefined()
     await pane.unmount()
