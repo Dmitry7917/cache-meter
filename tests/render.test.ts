@@ -27,6 +27,18 @@ const seeded: Record<string, unknown> = {
   bigResults: [{ at: 0, label: 'Read UserController.php', tokens: 22_000 }],
   fileReads: { '/a/UserController.php': { reads: 3, tokens: 60_000 } },
   toolUsage: { Read: { calls: 12, tokens: 84_000 }, 'MCP phpstorm': { calls: 3, tokens: 9_000 } },
+  contextParts: {
+    at: NOW,
+    total: 250_000,
+    parts: [
+      { name: 'System prompt', tokens: 8_000, isDeferred: false },
+      { name: 'Messages', tokens: 200_000, isDeferred: false },
+      { name: 'MCP tools', tokens: 40_000, isDeferred: false },
+      { name: 'Deferred tools', tokens: 12_000, isDeferred: true },
+    ],
+    memory: [{ path: '/a/CLAUDE.md', tokens: 9_000 }],
+    mcp: [{ server: 'phpstorm', tools: 80, tokens: 40_000 }],
+  },
 }
 
 test('the band and the pane draw on terminal and desktop', async ($, on) => {
@@ -57,6 +69,10 @@ test('the band and the pane draw on terminal and desktop', async ($, on) => {
       props: { title: 'Cache meter', isFocused: true, bodyColumns: 120, placement: 'dock', scroll, view: {} },
     })
     expect(await pane.find({ type: 'Text', text: /Самые дорогие ответы/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^Messages\s+≈\s*200k  80%$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^MCP: phpstorm ≈40k \(80\)$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^память: CLAUDE\.md ≈9k$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^вне окна .*Deferred tools ≈12k$/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /смена модели/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /Explore\s+find handleRequest callers\s+идёт\s+≈\s*340k/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /Plan\s+draft the migration\s+готов\s+≈\s*160k/ })).toBeDefined()
@@ -106,8 +122,12 @@ test('the stats pane sums every session by day and period', async ($, on) => {
   const stats: Record<string, unknown> = {
     now: NOW,
     tzOffsetMinutes: 180,
+    // As 0.7.0 left it: bare days.
     ownDays: { '2026-10-14': day(3, 100_000) },
-    otherDays: { '2026-10-14': day(2, 100_000), '2026-10-13': day(5, 400_000), '2026-09-01': day(9, 900_000) },
+    otherDays: {
+      '/work/mp-ranker-back': { '2026-10-14': day(2, 100_000), '2026-10-13': day(5, 400_000) },
+      '/work/cache-meter': { '2026-09-01': day(9, 900_000) },
+    },
   }
   on('state.get', ($, e, next) =>
     e.plugin === 'cache-meter' && e.key in stats ? { value: { value: stats[e.key], version: 1 } } : next(e),
@@ -127,6 +147,10 @@ test('the stats pane sums every session by day and period', async ($, on) => {
     expect(await pane.find({ type: 'Text', text: /^30 дней\s+≈.* 10 ответов/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /потери кэша 2 \(записано 300k\)/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /^ср 14\.10/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^mp-ranker-back\s+≈\S+\s+≈\S+\s+≈/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^\(без проекта\)/ })).toBeDefined()
+    // Older than 30 days: not among the projects.
+    expect(await pane.find({ type: 'Text', text: /^cache-meter\s/ })).toBeUndefined()
     await pane.unmount()
   }
 })

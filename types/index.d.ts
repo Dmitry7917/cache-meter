@@ -59,6 +59,21 @@ export type DayStats = {
   compactions: number
 }
 
+/** Days by project root, each day by its local date: what one session, or every other summed, spent where. */
+export type ProjectDays = Record<string, Record<string, DayStats>>
+
+/** One row of the context as /context counts it; a deferred row is outside the window. */
+export type ContextPart = { name: string; tokens: number; isDeferred: boolean }
+
+/** What the context is made of, as of the last measure. */
+export type ContextParts = {
+  at: number
+  total: number
+  parts: ContextPart[]
+  memory: { path: string; tokens: number }[]
+  mcp: { server: string; tools: number; tokens: number }[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'cache-meter': {
@@ -77,10 +92,11 @@ declare module 'claude-code' {
       autoCredits: number
       bigResults: BigResult[]
       fileReads: Record<string, FileReads>
-      /** This session's days, as last written to the store. */
-      ownDays: Record<string, DayStats>
-      /** Every other session's days, summed, as read from the store when /cache-stats opened. */
-      otherDays: Record<string, DayStats>
+      /** This session's days by project, as last written to the store. */
+      ownDays: ProjectDays
+      /** Every other session's days by project, summed, as read from the store when /cache-stats opened. */
+      otherDays: ProjectDays
+      contextParts: ContextParts | null
     }
   }
 }

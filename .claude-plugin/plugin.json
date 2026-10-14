@@ -1,6 +1,6 @@
 {
   "name": "cache-meter",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Context size, prompt cache countdown, subscription limits and subagents above the prompt; per-answer token summary, history pane, per-day stats over all sessions and /keepalive",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -66,6 +66,12 @@
       "type": "number",
       "title": "Ask before sending over an expired cache from (k tokens)",
       "description": "When the cache has expired and the context is at least this many thousand tokens, ask before a message rewrites it, offering to compact first; 0 never asks",
+      "default": 100
+    },
+    "confirmSwitchK": {
+      "type": "number",
+      "title": "Ask before /model or /effort from (k tokens)",
+      "description": "While the cache lives and the context is at least this many thousand tokens, ask before /model or /effort throws the cache away; 0 never asks",
       "default": 100
     }
   }

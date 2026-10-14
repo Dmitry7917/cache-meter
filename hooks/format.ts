@@ -1,4 +1,4 @@
-import type { BigResult, CacheHit, DayStats, Tokens, TurnRecord } from '../types'
+import type { BigResult, CacheHit, DayStats, ProjectDays, Tokens, TurnRecord } from '../types'
 
 export const GREEN = '#4caf50'
 export const YELLOW = '#e5c000'
@@ -284,4 +284,34 @@ export function cacheHitPercent(t: Tokens): number {
  */
 export function cacheSavings(t: Tokens): number {
   return t.read * (WEIGHT.input - WEIGHT.read) - t.write * (WEIGHT.write - WEIGHT.input)
+}
+
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
+
+/** A session's stored value as days by project; 0.7.0 stored bare days, under no project. */
+export function toProjectDays(value: unknown): ProjectDays {
+  if (typeof value !== 'object' || value === null) return {}
+  const entries = Object.keys(value)
+  if (entries.length > 0 && entries.every(k => DAY_KEY.test(k))) return { '': value as Record<string, DayStats> }
+  return value as ProjectDays
+}
+
+/** Several sessions' projects summed, project by project. */
+export function mergeProjects(list: readonly ProjectDays[]): ProjectDays {
+  const merged: ProjectDays = {}
+  for (const projects of list) {
+    for (const [project, days] of Object.entries(projects)) merged[project] = mergeDays([merged[project] ?? {}, days])
+  }
+  return merged
+}
+
+/** Every project's days summed into one. */
+export function allDays(projects: ProjectDays): Record<string, DayStats> {
+  return mergeDays(Object.values(projects))
+}
+
+/** The latest day any project of a session has. */
+export function latestDay(projects: ProjectDays): string | null {
+  const keys = Object.values(projects).flatMap(days => Object.keys(days))
+  return keys.length === 0 ? null : keys.reduce((a, b) => (a > b ? a : b))
 }

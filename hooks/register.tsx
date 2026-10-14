@@ -1,5 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptSubmitInput, Register, SessionContextUsage, SessionRateLimit } from 'claude-code'
+import type {
+  CommandRunInput,
+  EngineInterface,
+  PromptSubmitInput,
+  Register,
+  SessionContextUsage,
+  SessionRateLimit,
+} from 'claude-code'
 
 import type {
   AgentRecord,
@@ -7,7 +14,9 @@ import type {
   CacheHit,
   CacheLoss,
   ContextFill,
+  ContextParts,
   DayStats,
+  ProjectDays,
   FileReads,
   RateLimitFill,
   Tokens,
@@ -17,6 +26,7 @@ import type {
 import {
   addTokens,
   addDay,
+  allDays,
   baseName,
   cacheHitPercent,
   cacheSavings,
@@ -37,15 +47,17 @@ import {
   inputEquivalent,
   keepBiggest,
   lastDays,
+  latestDay,
   limitColor,
   limitLabel,
-  mergeDays,
+  mergeProjects,
   NO_DAY,
   NO_TOKENS,
   parseTzOffset,
   plural,
   sparkline,
   sumDays,
+  toProjectDays,
   toolGroup,
   totalTokens,
   turnSummary,
@@ -78,12 +90,14 @@ const bigResults = atom({ plugin: 'cache-meter', key: 'bigResults' } as const, [
 const fileReads = atom({ plugin: 'cache-meter', key: 'fileReads' } as const, {})
 const ownDays = atom({ plugin: 'cache-meter', key: 'ownDays' } as const, {})
 const otherDays = atom({ plugin: 'cache-meter', key: 'otherDays' } as const, {})
+const contextParts = atom({ plugin: 'cache-meter', key: 'contextParts' } as const, null)
 
 type Settings = { ttlMs: number; ttlLabel: string; warnMs: number; autoMs: number }
 
 const SEND = 'Отправить'
 const COMPACT_AND_SEND = 'Сжать и отправить'
 const CANCEL = 'Отмена'
+const PROCEED = 'Продолжить'
 
 type KeepaliveOutcome = { isRefreshed: boolean; text: string }
 
@@ -142,6 +156,7 @@ async function measureCompacted($: EngineInterface, before: number | null, attem
   const window = usage.context.window
   const fill: ContextFill = { tokens, window, percent: Math.round((tokens / window) * 100), isEstimate: true }
   await update($, contextFill, () => fill)
+  await measureParts($).catch(() => undefined)
   $.ui.log(`сжатие: ${before === null ? '' : `${formatTokens(before)} → `}≈${formatTokens(tokens)}`)
 }
 
@@ -207,26 +222,77 @@ function restoreDraft($: EngineInterface, text: string): void {
 async function recordDay($: EngineInterface, change: (d: DayStats) => DayStats): Promise<void> {
   if (storeKey === '') return
   const today = dayKey(await $.clock.now(), await read($, tzOffset))
-  const days = await update($, ownDays, all => ({ ...all, [today]: change(all[today] ?? NO_DAY) }))
-  await $.store.set(storeKey, days).catch(() => undefined)
+  const root = await $.session.root().catch(() => '')
+  const projects = await update($, ownDays, all => {
+    const days = all[root] ?? {}
+    return { ...all, [root]: { ...days, [today]: change(days[today] ?? NO_DAY) } }
+  })
+  await $.store.set(storeKey, projects).catch(() => undefined)
 }
 
 /** Every other session's days from the store, summed; keys whose last day is past KEEP_DAYS are dropped. */
-async function loadOtherDays($: EngineInterface): Promise<Record<string, DayStats>> {
+async function loadOtherDays($: EngineInterface): Promise<ProjectDays> {
   const oldest = dayKey((await $.clock.now()) - KEEP_DAYS * 86_400_000, await read($, tzOffset))
-  const maps: Record<string, DayStats>[] = []
+  const sessions: ProjectDays[] = []
   for (const key of await $.store.keys()) {
     if (!key.startsWith(STORE_PREFIX) || key === storeKey) continue
-    const value = await $.store.get(key)
-    const days = typeof value === 'object' && value !== null ? (value as Record<string, DayStats>) : {}
-    const keys = Object.keys(days)
-    if (keys.length === 0 || keys.every(k => k < oldest)) {
+    const projects = toProjectDays(await $.store.get(key))
+    const latest = latestDay(projects)
+    if (latest === null || latest < oldest) {
       await $.store.delete(key)
       continue
     }
-    maps.push(days)
+    sessions.push(projects)
   }
-  return mergeDays(maps)
+  return mergeProjects(sessions)
+}
+
+/** Reads what the context is made of, as /context counts it, for the pane. */
+async function measureParts($: EngineInterface): Promise<void> {
+  const usage = await $.session.usage({ breakdown: 'summary' })
+  const b = usage.context.breakdown
+  if (b === undefined) return
+  const servers = new Map<string, { tools: number; tokens: number }>()
+  for (const tool of b.mcpTools) {
+    const was = servers.get(tool.serverName) ?? { tools: 0, tokens: 0 }
+    servers.set(tool.serverName, { tools: was.tools + 1, tokens: was.tokens + tool.tokens })
+  }
+  const parts: ContextParts = {
+    at: await $.clock.now(),
+    total: b.totalTokens,
+    parts: b.categories
+      .filter(c => (c.kind === 'used' || c.kind === 'deferred') && c.tokens > 0)
+      .map(c => ({ name: c.name, tokens: c.tokens, isDeferred: c.kind === 'deferred' })),
+    memory: b.memoryFiles.map(f => ({ path: f.path, tokens: f.tokens })).sort((x, y) => y.tokens - x.tokens),
+    mcp: [...servers].map(([server, v]) => ({ server, ...v })).sort((x, y) => y.tokens - x.tokens),
+  }
+  await update($, contextParts, () => parts)
+}
+
+/**
+ * A model or effort change while the cache lives throws the cache away: the
+ * next request writes the whole context again. Asks first; resolves the
+ * command's answer when the person cancels, or null to run it.
+ */
+async function askBeforeReset(
+  $: EngineInterface,
+  e: CommandRunInput,
+  what: string,
+  settings: Settings,
+  minTokens: number,
+): Promise<{ text: string } | null> {
+  if (minTokens === 0 || e.origin.kind !== 'composer' || isTurnRunning) return null
+  const hit = await read($, last)
+  const fill = await read($, contextFill)
+  if (hit === null || fill === null || fill.tokens < minTokens) return null
+  const left = hit.at + settings.ttlMs - (await $.clock.now())
+  if (left <= 0) return null
+
+  const question =
+    `${what} сбросит кэш: следующий запрос заново запишет ~${formatTokens(fill.tokens)} ` +
+    `(≈${formatTokens(fill.tokens * 2)} вх.), а кэш жив ещё ${Math.ceil(left / 60_000)} мин. Продолжить?`
+  const answer = await $.ui.ask(question, { header: 'Сброс кэша', options: [PROCEED, CANCEL] }).catch(() => CANCEL)
+  return answer === PROCEED ? null : { text: `${what} отменена, кэш сохранён.` }
 }
 
 function usageTokens(u: { input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number; output_tokens: number }): Tokens {
@@ -331,6 +397,8 @@ export const register: Register = (on, options) => {
   const repeatReads = typeof options.repeatReads === 'number' ? options.repeatReads : 3
   // A request over an expired cache this big asks first; 0 never asks.
   const confirmExpiredTokens = options.confirmExpiredK === 0 ? 0 : thousands(options.confirmExpiredK, 100)
+  // A model or effort change over a live cache this big asks first; 0 never asks.
+  const confirmSwitchTokens = options.confirmSwitchK === 0 ? 0 : thousands(options.confirmSwitchK, 100)
   const thresholds: ContextThresholds = {
     yellow: thousands(options.ctxYellowK, 200),
     orange: thousands(options.ctxOrangeK, 300),
@@ -365,6 +433,7 @@ export const register: Register = (on, options) => {
     storeKey = `${STORE_PREFIX}${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
     await update($, ownDays, () => ({}))
 
+    await measureParts($).catch(() => undefined)
     await tick($, settings)
     $.clock.every(1000, () => void tick($, settings))
     return started
@@ -381,6 +450,14 @@ export const register: Register = (on, options) => {
     await $.ui.open({ id: STATS_PANE, title: 'Cache stats' })
     return { text: 'Панель статистики по дням открыта.' }
   })
+
+  on('command.run', { command: 'model' }, async ($, e, next) => {
+    return (await askBeforeReset($, e, 'Смена модели', settings, confirmSwitchTokens)) ?? next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('command.run', { command: 'effort' }, async ($, e, next) => {
+    return (await askBeforeReset($, e, 'Смена effort', settings, confirmSwitchTokens)) ?? next(e)
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'keepalive' }, async $ => {
     if (isKeepaliveRunning) return { text: 'Продление уже идёт.' }
@@ -442,6 +519,7 @@ export const register: Register = (on, options) => {
     const fill = toFill(e.context)
     if (fill !== null) await update($, contextFill, () => fill)
     await update($, limits, () => toLimits(e.rateLimits))
+    await measureParts($).catch(() => undefined)
     return next(e)
   })
 
@@ -665,6 +743,9 @@ export const register: Register = (on, options) => {
       .sort((a, b) => b[1].tokens - a[1].tokens)
       .slice(0, 10)
 
+    const composition = await read($, contextParts)
+    const used = composition === null ? [] : [...composition.parts].filter(p => !p.isDeferred).sort((a, b) => b.tokens - a.tokens)
+    const deferred = composition === null ? [] : composition.parts.filter(p => p.isDeferred)
     const sizes = history.map(t => t.contextTokens ?? 0)
     const first = sizes.find(s => s > 0)
     const lastSize = sizes[sizes.length - 1]
@@ -690,6 +771,45 @@ export const register: Register = (on, options) => {
             <Text color={contextColor(lastSize ?? 0, thresholds)}>{sparkline(sizes.slice(-60))}</Text>
             {`  ${formatTokens(first ?? 0)} → ${formatTokens(lastSize ?? 0)}`}
           </Text>
+        )}
+        <Text> </Text>
+
+        <Text weight="bold">Из чего состоит контекст</Text>
+        {composition === null ? (
+          <Text dimColor>Появится после первого ответа.</Text>
+        ) : (
+          [
+            ...used.map((p, i) => (
+              <Text key={`part-${i}`}>
+                {`${clip(p.name, 24).padEnd(24)} ≈${formatTokens(p.tokens).padStart(5)}`}
+                <Text dimColor>{`  ${Math.round((p.tokens / Math.max(1, composition.total)) * 100)}%`}</Text>
+              </Text>
+            )),
+            composition.mcp.length === 0 ? null : (
+              <Text key="part-mcp" dimColor>
+                {`MCP: ${composition.mcp
+                  .slice(0, 6)
+                  .map(m => `${m.server} ≈${formatTokens(m.tokens)} (${m.tools})`)
+                  .join(' · ')}`}
+              </Text>
+            ),
+            composition.memory.length === 0 ? null : (
+              <Text key="part-memory" dimColor>
+                {`память: ${composition.memory
+                  .slice(0, 6)
+                  .map(m => `${baseName(m.path)} ≈${formatTokens(m.tokens)}`)
+                  .join(' · ')}`}
+              </Text>
+            ),
+            deferred.length === 0 ? null : (
+              <Text key="part-deferred" dimColor>
+                {`вне окна (грузятся по запросу): ${deferred.map(p => `${p.name} ≈${formatTokens(p.tokens)}`).join(' · ')}`}
+              </Text>
+            ),
+            <Text key="part-note" dimColor>
+              {`оценка, как в /context, на ${formatTime(composition.at, tz)}; итог ≈${formatTokens(composition.total)}`}
+            </Text>,
+          ]
         )}
         <Text> </Text>
 
@@ -784,16 +904,30 @@ export const register: Register = (on, options) => {
   })
   on('ui.render', { component: 'Pane', requestId: STATS_PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
-    const days = mergeDays([await read($, otherDays), await read($, ownDays)])
+    // A value left by 0.7.0 holds bare days: read both as days by project.
+    const projects = mergeProjects([toProjectDays(await read($, otherDays)), toProjectDays(await read($, ownDays))])
+    const days = allDays(projects)
     const today = dayKey(await read($, clockNow), await read($, tzOffset))
     const recent = lastDays(today, 14)
+    const week = lastDays(today, 7)
+    const month = lastDays(today, 30)
     const yesterday = recent[recent.length - 2] ?? today
     const periods: [string, DayStats][] = [
       ['Сегодня', sumDays(days, [today])],
       ['Вчера', sumDays(days, [yesterday])],
-      ['7 дней', sumDays(days, lastDays(today, 7))],
-      ['30 дней', sumDays(days, lastDays(today, 30))],
+      ['7 дней', sumDays(days, week)],
+      ['30 дней', sumDays(days, month)],
     ]
+    const byProject = Object.entries(projects)
+      .map(([root, d]) => ({
+        name: root === '' ? '(без проекта)' : baseName(root),
+        today: inputEquivalent(dayTokens(sumDays(d, [today]))),
+        week: inputEquivalent(dayTokens(sumDays(d, week))),
+        month: inputEquivalent(dayTokens(sumDays(d, month))),
+      }))
+      .filter(p => p.month > 0)
+      .sort((a, b) => b.month - a.month)
+      .slice(0, 10)
     const perDay = recent.map(key => ({ key, cost: inputEquivalent(dayTokens(days[key] ?? NO_DAY)), day: days[key] ?? NO_DAY }))
     const top = Math.max(1, ...perDay.map(d => d.cost))
 
@@ -816,6 +950,21 @@ export const register: Register = (on, options) => {
             </Box>
           )
         })}
+        <Text> </Text>
+
+        <Text weight="bold">По проектам</Text>
+        {byProject.length === 0 ? (
+          <Text dimColor>—</Text>
+        ) : (
+          [
+            <Text key="project-head" dimColor>{`${''.padEnd(24)}${'сегодня'.padStart(9)}${'7 дней'.padStart(9)}${'30 дней'.padStart(9)}`}</Text>,
+            ...byProject.map((p, i) => (
+              <Text key={`project-${i}`}>
+                {`${clip(p.name, 22).padEnd(24)}${`≈${formatTokens(p.today)}`.padStart(9)}${`≈${formatTokens(p.week)}`.padStart(9)}${`≈${formatTokens(p.month)}`.padStart(9)}`}
+              </Text>
+            )),
+          ]
+        )}
         <Text> </Text>
 
         <Text weight="bold">По дням</Text>
