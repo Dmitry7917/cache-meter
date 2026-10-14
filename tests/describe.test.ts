@@ -179,11 +179,12 @@ test('draws the context as a gradient with each zone dashed ahead', async () => 
   expect(gradientColor(400_000, t)).toBe(RED)
   expect(gradientColor(900_000, t)).toBe(RED)
 
+  // The line ends at red: 25 cells of 16k.
   const cells = contextGradient(250_000, t)
   expect(cells).toHaveLength(25)
-  expect(cells.filter(c => c.isFilled)).toHaveLength(13)
-  expect(cells.slice(13).map(c => c.color)).toEqual([...Array(2).fill(YELLOW), ...Array(5).fill(ORANGE), ...Array(5).fill(RED)])
-  expect(joinCells(cells.slice(13)).map(r => r.char)).toEqual(['╌╌', '╌╌╌╌╌', '╌╌╌╌╌'])
-  expect(contextGradient(600_000, t).every(c => c.isFilled)).toBe(true)
+  expect(cells.filter(c => c.isFilled)).toHaveLength(16)
+  expect(cells.slice(16).map(c => c.color)).toEqual([...Array(3).fill(YELLOW), ...Array(6).fill(ORANGE)])
+  expect(joinCells(cells.slice(16)).map(r => r.char)).toEqual(['╌╌╌', '╌╌╌╌╌╌'])
+  expect(contextGradient(400_000, t).every(c => c.isFilled && c.color === RED)).toBe(true)
   expect(contextGradient(0, t).some(c => c.isFilled)).toBe(false)
 })

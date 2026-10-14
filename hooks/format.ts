@@ -352,16 +352,16 @@ export function gradientColor(tokens: number, t: ContextThresholds): string {
 }
 
 /**
- * The context as a line from 0 to a zone past red: filled cells in the
+ * The context as a line from 0 to the red threshold: filled cells in the
  * smooth gradient, empty ones dashed in their zone's own colour, so every
- * boundary shows before the context reaches it.
+ * boundary shows before the context reaches it. Past red the whole line is red.
  */
 export function contextGradient(tokens: number, t: ContextThresholds, cells = GRADIENT_CELLS): GradientCell[] {
-  const end = t.red + (t.red - t.orange)
-  const step = end / cells
+  if (tokens >= t.red) return Array.from({ length: cells }, () => ({ char: FILLED, color: RED, isFilled: true }))
+  const step = t.red / cells
   return Array.from({ length: cells }, (_, i) => {
     const mid = (i + 0.5) * step
-    const isFilled = tokens >= mid || (i === cells - 1 && tokens >= end)
+    const isFilled = tokens >= mid
     return isFilled
       ? { char: FILLED, color: gradientColor(mid, t), isFilled }
       : { char: EMPTY, color: contextColor(mid, t), isFilled }

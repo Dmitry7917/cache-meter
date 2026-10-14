@@ -54,11 +54,11 @@ test('the band and the pane draw on terminal and desktop', async ($, on) => {
       props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll, view: {} },
     })
     // JSX keys do not reach the drawn tree: elements are found by what they show.
-    // 250k on a 0–500k line: 13 filled cells, then dashes in the yellow, orange and red zones' colours.
-    expect(await band.findAll({ type: 'Text', text: /^━$/ })).toHaveLength(13)
-    expect((await band.find({ type: 'Text', text: /^╌╌$/ }))?.props.color).toBe('#e5c000')
-    expect((await band.find({ type: 'Text', text: /^╌╌╌╌╌$/ }))?.props.color).toBe('#ff8c00')
-    expect((await band.find({ type: 'Text', text: /^╌╌╌╌╌$/ }))?.props.dimColor).toBe(true)
+    // 250k on a 0–400k line: 16 filled cells, then dashes in the yellow and orange zones' colours.
+    expect(await band.findAll({ type: 'Text', text: /^━$/ })).toHaveLength(16)
+    expect((await band.find({ type: 'Text', text: /^╌╌╌$/ }))?.props.color).toBe('#e5c000')
+    expect((await band.find({ type: 'Text', text: /^╌╌╌╌╌╌$/ }))?.props.color).toBe('#ff8c00')
+    expect((await band.find({ type: 'Text', text: /^╌╌╌╌╌╌$/ }))?.props.dimColor).toBe(true)
     expect((await band.find({ type: 'Text', text: /^50:00$/ }))?.props.color).toBe('#4caf50')
     expect((await band.find({ type: 'Text', text: /^81%$/ }))?.props.color).toBe('#ff8c00')
     expect(await band.find({ type: 'Text', text: /^ до 14:30$/ })).toBeDefined()
