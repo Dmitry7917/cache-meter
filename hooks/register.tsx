@@ -125,6 +125,29 @@ let isKeepaliveRunning = false
 let storeKey = ''
 /** Set by the compact hook, so a compaction this plugin asked for is not handled twice. */
 let isCompactHandled = false
+/** When this load last asked `date` for the offset; the tick asks again each minute until it answers. */
+let tzAskedAt: number | null = null
+let isTzKnown = false
+
+/**
+ * The local offset into state: `date +%z` first, the module's own clock if that fails.
+ * Asked from the tick, not once at start, so a failed first call does not leave the times in UTC.
+ */
+async function refreshTzOffset($: EngineInterface, now: number): Promise<void> {
+  if (isTzKnown || (tzAskedAt !== null && now - tzAskedAt < 60_000)) return
+  tzAskedAt = now
+  const date = await $.process.run(['date', '+%z'], { timeoutMs: 5000 }).catch((error: unknown) => {
+    $.ui.log(`cache-meter: date +%z не запустился: ${String(error)}`, { to: 'debug' })
+    return null
+  })
+  const fromDate = date !== null && date.exitCode === 0 ? parseTzOffset(date.stdout) : null
+  if (date !== null && fromDate === null) {
+    $.ui.log(`cache-meter: date +%z ответил ${date.exitCode}: ${JSON.stringify(date.stdout.slice(0, 40))}`, { to: 'debug' })
+  }
+  isTzKnown = fromDate !== null
+  const offset = fromDate ?? -new Date(now).getTimezoneOffset()
+  await update($, tzOffset, () => offset)
+}
 
 function thousands(value: unknown, fallback: number): number {
   return typeof value === 'number' && value > 0 ? value * 1000 : fallback * 1000
@@ -335,6 +358,7 @@ function usageTokens(u: { input_tokens: number; cache_read_input_tokens: number;
 async function tick($: EngineInterface, settings: Settings): Promise<void> {
   const now = await $.clock.now()
   await update($, clockNow, () => now)
+  void refreshTzOffset($, now)
 
   const hit = await read($, last)
   if (hit === null || isTurnRunning || isKeepaliveRunning) return
@@ -460,9 +484,7 @@ export const register: Register = (on, options) => {
     await update($, contextFill, () => fill)
     await update($, limits, () => toLimits(usage.rateLimits))
 
-    const date = await $.process.run(['date', '+%z']).catch(() => null)
-    const offset = date === null ? 0 : parseTzOffset(date.stdout)
-    await update($, tzOffset, () => offset)
+    await refreshTzOffset($, await $.clock.now())
 
     storeKey = `${STORE_PREFIX}${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
     await update($, ownDays, () => ({}))

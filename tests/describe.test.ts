@@ -122,7 +122,7 @@ test('names why a live cache was lost, and stays quiet otherwise', async () => {
 test('reads the local offset and shows reset times in it', async () => {
   expect(parseTzOffset('+0300\n')).toBe(180)
   expect(parseTzOffset('-0530')).toBe(-330)
-  expect(parseTzOffset('garbage')).toBe(0)
+  expect(parseTzOffset('garbage')).toBeNull()
 
   const now = Date.parse('2026-10-14T09:00:00Z')
   expect(formatTime(now, 180)).toBe('12:00')
