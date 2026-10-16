@@ -28,7 +28,6 @@ import {
   formatReset,
   formatTime,
   inputEquivalent,
-  parseTzOffset,
   plural,
   sparkline,
   turnSummary,
@@ -119,16 +118,17 @@ test('names why a live cache was lost, and stays quiet otherwise', async () => {
   )
 })
 
-test('reads the local offset and shows reset times in it', async () => {
-  expect(parseTzOffset('+0300\n')).toBe(180)
-  expect(parseTzOffset('-0530')).toBe(-330)
-  expect(parseTzOffset('garbage')).toBeNull()
+test('shows reset times in the local offset', async () => {
 
   const now = Date.parse('2026-10-14T09:00:00Z')
   expect(formatTime(now, 180)).toBe('12:00')
   expect(formatReset('2026-10-14T11:30:00Z', now, 180)).toBe('14:30')
   expect(formatReset('2026-10-16T07:00:00Z', now, 180)).toBe('пт 10:00')
   expect(formatReset('not a date', now, 180)).toBeNull()
+
+  const friday = Date.parse('2026-10-16T20:53:00Z')
+  expect(formatReset('2026-10-17T01:40:00.000Z', friday, 180)).toBe('04:40')
+  expect(formatReset('2026-10-19T21:00:00.000Z', friday, 180)).toBe('вт 00:00')
 })
 
 test('draws context growth as a sparkline', async () => {

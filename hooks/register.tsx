@@ -58,7 +58,6 @@ import {
   modelRows,
   NO_DAY,
   NO_TOKENS,
-  parseTzOffset,
   plural,
   sparkline,
   sumDays,
@@ -125,28 +124,13 @@ let isKeepaliveRunning = false
 let storeKey = ''
 /** Set by the compact hook, so a compaction this plugin asked for is not handled twice. */
 let isCompactHandled = false
-/** When this load last asked `date` for the offset; the tick asks again each minute until it answers. */
-let tzAskedAt: number | null = null
-let isTzKnown = false
-
 /**
- * The local offset into state: `date +%z` first, the module's own clock if that fails.
- * Asked from the tick, not once at start, so a failed first call does not leave the times in UTC.
+ * The local offset into state from the module's own clock, on every tick (so a DST switch lands too).
+ * Not `date +%z`: a session-start answer of `+0000` would be taken as known and pin the times to UTC.
  */
 async function refreshTzOffset($: EngineInterface, now: number): Promise<void> {
-  if (isTzKnown || (tzAskedAt !== null && now - tzAskedAt < 60_000)) return
-  tzAskedAt = now
-  const date = await $.process.run(['date', '+%z'], { timeoutMs: 5000 }).catch((error: unknown) => {
-    $.ui.log(`cache-meter: date +%z не запустился: ${String(error)}`, { to: 'debug' })
-    return null
-  })
-  const fromDate = date !== null && date.exitCode === 0 ? parseTzOffset(date.stdout) : null
-  if (date !== null && fromDate === null) {
-    $.ui.log(`cache-meter: date +%z ответил ${date.exitCode}: ${JSON.stringify(date.stdout.slice(0, 40))}`, { to: 'debug' })
-  }
-  isTzKnown = fromDate !== null
-  const offset = fromDate ?? -new Date(now).getTimezoneOffset()
-  await update($, tzOffset, () => offset)
+  const offset = -new Date(now).getTimezoneOffset()
+  if ((await read($, tzOffset)) !== offset) await update($, tzOffset, () => offset)
 }
 
 function thousands(value: unknown, fallback: number): number {
@@ -358,7 +342,7 @@ function usageTokens(u: { input_tokens: number; cache_read_input_tokens: number;
 async function tick($: EngineInterface, settings: Settings): Promise<void> {
   const now = await $.clock.now()
   await update($, clockNow, () => now)
-  void refreshTzOffset($, now)
+  await refreshTzOffset($, now)
 
   const hit = await read($, last)
   if (hit === null || isTurnRunning || isKeepaliveRunning) return

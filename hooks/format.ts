@@ -92,14 +92,6 @@ export function formatReset(resetsAt: string, now: number, tzOffsetMinutes: numb
   return at - now < 24 * 60 * 60_000 ? hhmm(d) : `${WEEKDAYS[d.getUTCDay()]} ${hhmm(d)}`
 }
 
-/** `date +%z` output (`+0300`) as minutes east of UTC; null when unreadable. */
-export function parseTzOffset(text: string): number | null {
-  const m = /^([+-])(\d{2})(\d{2})/.exec(text.trim())
-  if (m === null) return null
-  const minutes = Number(m[2]) * 60 + Number(m[3])
-  return m[1] === '-' ? -minutes : minutes
-}
-
 /**
  * Context size against absolute thresholds, not the share of the window:
  * quality drops long before a 1M window fills, so the window does not matter.
