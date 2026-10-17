@@ -62,6 +62,8 @@ import {
   sparkline,
   sumDays,
   toProjectDays,
+  toSavedLimits,
+  toSnapshot,
   toolGroup,
   totalTokens,
   turnSummary,
@@ -71,13 +73,17 @@ import {
   withModel,
   withSkillCall,
 } from './format'
-import type { ContextThresholds } from './format'
+import type { ContextThresholds, Snapshot } from './format'
 
 const PANE = 'cache-meter'
 const STATS_PANE = 'cache-stats'
 /** Each session's days are one store key, so parallel sessions never overwrite each other. */
 const STORE_PREFIX = 'days:'
 const KEEP_DAYS = 60
+/** The band's last figures of each session, so a resumed one shows them before its first answer. */
+const SNAPSHOT_PREFIX = 'snapshot:'
+/** The account's rate-limit windows as last reported, whichever session saw them. */
+const LIMITS_KEY = 'rateLimits'
 const KEEPALIVE_PROMPT = 'Служебный запрос для продления кэша: ответь одним словом «ok».'
 const COMPACT_POLL_MS = 1000
 const COMPACT_POLL_ATTEMPTS = 30
@@ -122,6 +128,8 @@ let isTurnRunning = false
 let isKeepaliveRunning = false
 /** This load's store key: a hot reload starts a new one, so nothing is counted twice. */
 let storeKey = ''
+/** The session's id, its snapshot's store key; empty until session.start reads it. */
+let sessionId = ''
 /** Set by the compact hook, so a compaction this plugin asked for is not handled twice. */
 let isCompactHandled = false
 /**
@@ -173,6 +181,7 @@ async function measureCompacted($: EngineInterface, before: number | null, attem
   const window = usage.context.window
   const fill: ContextFill = { tokens, window, percent: Math.round((tokens / window) * 100), isEstimate: true }
   await update($, contextFill, () => fill)
+  await saveSnapshot($)
   await measureParts($).catch(() => undefined)
   $.ui.log(`сжатие: ${before === null ? '' : `${formatTokens(before)} → `}≈${formatTokens(tokens)}`)
 }
@@ -278,6 +287,38 @@ async function loadOtherDays($: EngineInterface): Promise<ProjectDays> {
     sessions.push(projects)
   }
   return mergeProjects(sessions)
+}
+
+/** Keeps the band's figures past the process: a resumed session reads them at start. */
+async function saveSnapshot($: EngineInterface): Promise<void> {
+  if (sessionId === '') return
+  const snapshot: Snapshot = { savedAt: await $.clock.now(), context: await read($, contextFill), last: await read($, last) }
+  await $.store.set(`${SNAPSHOT_PREFIX}${sessionId}`, snapshot).catch(() => undefined)
+}
+
+/**
+ * Before a resumed session's first answer the engine has no context size, cache
+ * hit or rate limits yet: the band starts from what it last showed instead.
+ * Snapshots of sessions untouched for KEEP_DAYS are dropped.
+ */
+async function restoreSnapshot($: EngineInterface, fresh: { fill: ContextFill | null; limits: RateLimitFill[] }): Promise<void> {
+  const now = await $.clock.now()
+  const keys = await $.store.keys().catch(() => [])
+  for (const key of keys) {
+    if (!key.startsWith(SNAPSHOT_PREFIX) || key === `${SNAPSHOT_PREFIX}${sessionId}`) continue
+    const old = toSnapshot(await $.store.get(key))
+    if (old === null || old.savedAt < now - KEEP_DAYS * 86_400_000) await $.store.delete(key).catch(() => undefined)
+  }
+
+  const saved = sessionId === '' ? null : toSnapshot(await $.store.get(`${SNAPSHOT_PREFIX}${sessionId}`).catch(() => null))
+  const context = saved?.context ?? null
+  await update($, contextFill, () => fresh.fill ?? (context === null ? null : { ...context, isEstimate: true }))
+  if (saved?.last != null && (await read($, last)) === null) {
+    const hit = saved.last
+    await update($, last, () => hit)
+  }
+  const limitsSaved = fresh.limits.length > 0 ? [] : toSavedLimits(await $.store.get(LIMITS_KEY).catch(() => null), now)
+  await update($, limits, () => (fresh.limits.length > 0 ? fresh.limits : limitsSaved))
 }
 
 /** Reads what the context is made of, as /context counts it, for the pane. */
@@ -415,6 +456,7 @@ async function keepalive($: EngineInterface, settings: Settings): Promise<Keepal
     effort: prev?.effort,
   }
   await update($, last, () => hit)
+  await saveSnapshot($)
   const until = formatTime(sentAt + settings.ttlMs, await read($, tzOffset))
   const size = fill === null ? '' : ` (~${formatTokens(fill.tokens)})`
   return { isRefreshed: true, text: `Кэш${size} продлён до ${until}: hit ${hitPercent}%, ${counts}${failure}.` }
@@ -463,10 +505,9 @@ export const register: Register = (on, options) => {
       description: 'Refresh the prompt cache TTL with one cheap request over this conversation',
     })
 
+    sessionId = await $.session.id().catch(() => '')
     const usage = await $.session.usage()
-    const fill = toFill(usage.context)
-    await update($, contextFill, () => fill)
-    await update($, limits, () => toLimits(usage.rateLimits))
+    await restoreSnapshot($, { fill: toFill(usage.context), limits: toLimits(usage.rateLimits) })
 
     await refreshTzOffset($, await $.clock.now())
 
@@ -568,7 +609,12 @@ export const register: Register = (on, options) => {
     // Right after a compaction the window has no response yet: keep the estimate.
     const fill = toFill(e.context)
     if (fill !== null) await update($, contextFill, () => fill)
-    await update($, limits, () => toLimits(e.rateLimits))
+    const fresh = toLimits(e.rateLimits)
+    if (fresh.length > 0) {
+      await update($, limits, () => fresh)
+      await $.store.set(LIMITS_KEY, fresh).catch(() => undefined)
+    }
+    await saveSnapshot($)
     await measureParts($).catch(() => undefined)
     return next(e)
   })
@@ -655,6 +701,7 @@ export const register: Register = (on, options) => {
     }
 
     await update($, last, () => hit)
+    await saveSnapshot($)
     await recordDay($, d =>
       withModel(
         {

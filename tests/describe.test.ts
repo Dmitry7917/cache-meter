@@ -18,6 +18,8 @@ import {
   withAgentType,
   withModel,
   mcpPrefix,
+  toSavedLimits,
+  toSnapshot,
   usageOver,
   withMcpCall,
   withSkillCall,
@@ -237,4 +239,25 @@ test('draws the context as a gradient with each zone dashed ahead', async () => 
   expect(joinCells(cells.slice(16)).map(r => r.char)).toEqual(['╌╌╌', '╌╌╌╌╌╌'])
   expect(contextGradient(400_000, t).every(c => c.isFilled && c.color === RED)).toBe(true)
   expect(contextGradient(0, t).some(c => c.isFilled)).toBe(false)
+})
+
+test('reads stored snapshots and limits back, dropping what is malformed or reset', () => {
+  expect(toSnapshot({ savedAt: 1, context: { tokens: 'x' }, last: { at: 2, hitPercent: 90, model: 'opus', effort: 'high' } })).toEqual({
+    savedAt: 1,
+    context: null,
+    last: { at: 2, hitPercent: 90, model: 'opus', effort: 'high' },
+  })
+  expect(toSnapshot('junk')).toBeNull()
+  const now = Date.parse('2026-10-17T09:00:00Z')
+  expect(
+    toSavedLimits(
+      [
+        { kind: 'five_hour', percentUsed: 5, resetsAt: '2026-10-17T08:59:00Z' },
+        { kind: 'seven_day', percentUsed: 1, resetsAt: '2026-10-19T21:00:00Z' },
+        { kind: 'seven_day_opus', percentUsed: 3 },
+      ],
+      now,
+    ),
+  ).toEqual([{ kind: 'seven_day', percentUsed: 1, resetsAt: '2026-10-19T21:00:00Z' }])
+  expect(toSavedLimits(null, now)).toEqual([])
 })

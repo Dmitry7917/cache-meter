@@ -1,4 +1,4 @@
-import type { AgentTypeDay, BigResult, CacheHit, DayStats, ProjectDays, Tokens, TurnRecord } from '../types'
+import type { AgentTypeDay, BigResult, CacheHit, ContextFill, DayStats, ProjectDays, RateLimitFill, Tokens, TurnRecord } from '../types'
 
 export const GREEN = '#4caf50'
 export const YELLOW = '#e5c000'
@@ -484,4 +484,42 @@ export function joinCells(cells: readonly GradientCell[]): GradientCell[] {
     }
   }
   return runs
+}
+
+/** What the band last showed in a session, kept in the store so a resumed session starts with it. */
+export type Snapshot = { savedAt: number; context: ContextFill | null; last: CacheHit | null }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function toContext(value: unknown): ContextFill | null {
+  if (!isRecord(value) || !isNumber(value.tokens) || !isNumber(value.window) || !isNumber(value.percent)) return null
+  return { tokens: value.tokens, window: value.window, percent: value.percent }
+}
+
+function toHit(value: unknown): CacheHit | null {
+  if (!isRecord(value) || !isNumber(value.at) || !isNumber(value.hitPercent) || typeof value.model !== 'string') return null
+  const effort = typeof value.effort === 'string' || isNumber(value.effort) ? value.effort : undefined
+  return { at: value.at, hitPercent: value.hitPercent, model: value.model, ...(effort === undefined ? {} : { effort }) }
+}
+
+/** A stored snapshot read back; anything malformed reads as nothing. */
+export function toSnapshot(value: unknown): Snapshot | null {
+  if (!isRecord(value) || !isNumber(value.savedAt)) return null
+  return { savedAt: value.savedAt, context: toContext(value.context), last: toHit(value.last) }
+}
+
+/** Stored rate-limit windows read back, without those already reset: their percent no longer holds. */
+export function toSavedLimits(value: unknown, now: number): RateLimitFill[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((r: unknown) => {
+    if (!isRecord(r) || typeof r.kind !== 'string' || !isNumber(r.percentUsed) || typeof r.resetsAt !== 'string') return []
+    const resetsAt = Date.parse(r.resetsAt)
+    return Number.isNaN(resetsAt) || resetsAt <= now ? [] : [{ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt }]
+  })
 }
